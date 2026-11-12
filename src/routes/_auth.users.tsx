@@ -1,15 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Plus, Trash2, ShieldAlert } from "lucide-react";
-import { store, useStore, useCurrentUser } from "@/lib/subay/store";
-import type { Role } from "@/lib/subay/types";
+import { store, useStore } from "@/lib/floodsight/store";
+import { useAuth } from "@/context/AuthContext.jsx";
+import type { Role } from "@/lib/floodsight/types";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_auth/users")({
   head: () => ({
     meta: [
-      { title: "User Access · SUBAY" },
-      { name: "description", content: "Manage SUBAY dashboard users and roles." },
+      { title: "User Access · FloodSight" },
+      { name: "description", content: "Manage FloodSight dashboard users and roles." },
     ],
   }),
   component: UsersPage,
@@ -22,7 +23,7 @@ const ROLE_LABEL: Record<Role, string> = {
 };
 
 function UsersPage() {
-  const user = useCurrentUser();
+  const { user, isAdmin } = useAuth();
   const users = useStore((s) => s.users);
   const navigate = useNavigate();
   const [name, setName] = useState("");
@@ -30,10 +31,10 @@ function UsersPage() {
   const [role, setRole] = useState<Role>("viewer");
 
   useEffect(() => {
-    if (user && user.role !== "admin") navigate({ to: "/" });
-  }, [user, navigate]);
+    if (isAdmin === false) navigate({ to: "/" });
+  }, [isAdmin, navigate]);
 
-  if (user && user.role !== "admin") {
+  if (isAdmin === false) {
     return (
       <div className="rounded-xl border border-border bg-card p-8 text-center">
         <ShieldAlert className="mx-auto h-8 w-8 text-muted-foreground" />
@@ -57,7 +58,7 @@ function UsersPage() {
       <header>
         <h1 className="text-2xl font-bold tracking-tight">User Access</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Add Gmail accounts and assign roles. Sign-in is restricted to listed users.
+          Manage authenticated Google accounts and assign roles. The list is populated from the current signed-in users.
         </p>
       </header>
 
@@ -145,7 +146,7 @@ function UsersPage() {
                 <td className="px-4 py-3 text-right">
                   <button
                     onClick={() => {
-                      if (u.id === user?.id) {
+                      if (u.id === user?.uid) {
                         toast.error("You can't remove yourself.");
                         return;
                       }

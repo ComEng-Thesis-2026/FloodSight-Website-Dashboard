@@ -1,31 +1,133 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { Save, ShieldAlert } from "lucide-react";
-import { store, useStore, useCurrentUser } from "@/lib/subay/store";
-import type { Camera } from "@/lib/subay/types";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Save, Search, ShieldAlert, Video } from "lucide-react";
+import { FeedSetupEditor } from "@/components/floodsight/FeedSetupEditor";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { store, useStore } from "@/lib/floodsight/store";
+import { useAuth } from "@/context/AuthContext.jsx";
+import type { Camera, FloodStatus, RoiPoint } from "@/lib/floodsight/types";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+
+const STATUS_DOT: Record<FloodStatus, string> = {
+  NORMAL: "var(--color-status-normal)",
+  ALERT: "var(--color-status-alert)",
+  DANGER: "var(--color-status-danger)",
+};
 
 export const Route = createFileRoute("/_auth/config")({
   head: () => ({
     meta: [
-      { title: "Camera Configuration · SUBAY" },
-      { name: "description", content: "Configure CCTV ROI and HSV thresholds." },
+      { title: "Camera Configuration · FloodSight" },
+      { name: "description", content: "Configure CCTV ROI for FloodSight." },
     ],
   }),
   component: ConfigPage,
 });
 
+const blankCamera: Camera = {
+  id: "draft-camera",
+  location: "New Camera",
+  coordinates: { lat: 8.4822, lng: 124.6433 },
+  waterLevel: 0,
+  floodStatus: "NORMAL",
+  timestamp: new Date().toISOString(),
+  snapshotUrl: "",
+  roiConfig: {
+    x: 100,
+    y: 180,
+    width: 320,
+    height: 380,
+    vertices: [
+      { x: 100, y: 180 },
+      { x: 420, y: 180 },
+      { x: 420, y: 560 },
+      { x: 100, y: 560 },
+    ],
+  },
+  hsvThresholds: { h_min: 0, h_max: 30, s_min: 50, s_max: 255, v_min: 40, v_max: 255 },
+  streamConfig: {
+    ipAddress: "",
+    port: 80,
+    snapshotPath: "/cgi-bin/snapshot.cgi?channel=1&subtype=0",
+  },
+};
+
+function getRoiVertices(roi: Camera["roiConfig"]): RoiPoint[] {
+  if (roi.vertices?.length === 4) return [...roi.vertices];
+  return [
+    { x: roi.x, y: roi.y },
+    { x: roi.x + roi.width, y: roi.y },
+    { x: roi.x + roi.width, y: roi.y + roi.height },
+    { x: roi.x, y: roi.y + roi.height },
+  ];
+}
+
+function roiFromVertices(
+  vertices: RoiPoint[],
+  imageWidth: number,
+  imageHeight: number,
+): Camera["roiConfig"] {
+  const boundedVertices = vertices.map((point) => ({
+    x: Math.min(Math.max(Math.round(point.x), 0), imageWidth),
+    y: Math.min(Math.max(Math.round(point.y), 0), imageHeight),
+  }));
+  const xValues = boundedVertices.map((point) => point.x);
+  const yValues = boundedVertices.map((point) => point.y);
+  const x = Math.min(...xValues);
+  const y = Math.min(...yValues);
+
+  return {
+    x,
+    y,
+    width: Math.max(...xValues) - x,
+    height: Math.max(...yValues) - y,
+    vertices: boundedVertices,
+  };
+}
+
 function ConfigPage() {
-  const user = useCurrentUser();
+  const { isAdmin } = useAuth();
   const cameras = useStore((s) => s.cameras);
   const navigate = useNavigate();
-  const [activeId, setActiveId] = useState(cameras[0]?.id ?? "");
+  const [activeId, setActiveId] = useState(cameras[0]?.id ?? "draft-camera");
+  const [filter, setFilter] = useState("");
 
   useEffect(() => {
-    if (user && user.role !== "admin") navigate({ to: "/" });
-  }, [user, navigate]);
+    if (isAdmin === false) {
+      navigate({ to: "/" });
+      return;
+    }
 
-  if (user && user.role !== "admin") {
+    let isMounted = true;
+
+    async function refreshCameras() {
+      try {
+        const response = await fetch("/api/cameras");
+        if (!response.ok) {
+          throw new Error(`API returned ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!isMounted) return;
+
+        store.syncCameras(data);
+        if (data.length > 0 && !data.some((camera: Camera) => camera.id === activeId)) {
+          setActiveId(data[0].id);
+        }
+      } catch {
+        // Keep the current local state if the backend is temporarily unavailable.
+      }
+    }
+
+    refreshCameras();
+    return () => {
+      isMounted = false;
+    };
+  }, [isAdmin, activeId, navigate]);
+
+  if (isAdmin === false) {
     return (
       <div className="rounded-xl border border-border bg-card p-8 text-center">
         <ShieldAlert className="mx-auto h-8 w-8 text-muted-foreground" />
@@ -34,73 +136,533 @@ function ConfigPage() {
     );
   }
 
-  const active = cameras.find((c) => c.id === activeId) ?? cameras[0];
-  if (!active) return null;
+  const active =
+    cameras.find((c) => c.id === activeId) ?? (cameras.length > 0 ? cameras[0] : blankCamera);
+  const hasCameras = cameras.length > 0;
+
+  const numbered = cameras.map((c, i) => ({ ...c, displayNumber: i + 1 }));
+  const filtered = filter.trim()
+    ? numbered.filter((c) => c.location.toLowerCase().includes(filter.trim().toLowerCase()))
+    : numbered;
 
   return (
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Camera Configuration</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tune Region of Interest and HSV thresholds for water-marker detection.
+          Tune the Region of Interest for water-marker detection.
         </p>
       </header>
 
-      <div className="flex flex-wrap gap-2">
-        {cameras.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => setActiveId(c.id)}
-            className={
-              "rounded-full border px-3 py-1.5 text-sm transition-colors " +
-              (c.id === activeId
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-border bg-card hover:bg-accent")
-            }
-          >
-            {c.location}
-          </button>
-        ))}
+      <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Cameras <span className="text-muted-foreground/70">({cameras.length})</span>
+          </h2>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter cameras…"
+              className="input w-48 pl-8 text-xs"
+            />
+          </div>
+        </div>
+
+        {hasCameras ? (
+          filtered.length > 0 ? (
+            <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-[repeat(16,minmax(0,1fr))]">
+              {filtered.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setActiveId(c.id)}
+                  title={c.location}
+                  className={cn(
+                    "flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2 text-xs font-medium transition-colors",
+                    c.id === activeId
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-background hover:bg-accent",
+                  )}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: STATUS_DOT[c.floodStatus] }}
+                  />
+                  {c.displayNumber}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="py-3 text-center text-xs text-muted-foreground">
+              No cameras match “{filter}”.
+            </p>
+          )
+        ) : (
+          <div className="rounded-xl border border-dashed border-border bg-background p-3 text-center text-xs text-muted-foreground">
+            No cameras saved yet. Fill in the form below to add your first CCTV.
+          </div>
+        )}
+
+        {hasCameras ? (
+          <p className="truncate text-xs text-muted-foreground">
+            Selected: <span className="font-medium text-foreground">{active.location}</span>
+          </p>
+        ) : null}
       </div>
 
-      <CameraEditor key={active.id} camera={active} />
+      {active.feed ? (
+        <FeedCameraEditor key={active.id} camera={active} />
+      ) : (
+        <CameraEditor
+          key={active.id}
+          camera={active}
+          onCreated={(created) => setActiveId(created.id)}
+        />
+      )}
     </div>
   );
 }
 
-function CameraEditor({ camera }: { camera: Camera }) {
+function CameraEditor({
+  camera,
+  onCreated,
+}: {
+  camera: Camera;
+  onCreated?: (camera: Camera) => void;
+}) {
   const [draft, setDraft] = useState<Camera>(camera);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(camera.snapshotUrl || null);
+  const [isFetchingSnapshot, setIsFetchingSnapshot] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [pendingRoi, setPendingRoi] = useState<Camera["roiConfig"] | null>(null);
+  const [previewRect, setPreviewRect] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [draggingVertex, setDraggingVertex] = useState<number | null>(null);
+  const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
 
-  function save() {
-    store.updateCamera(camera.id, draft);
-    toast.success("Camera configuration saved", { description: draft.location });
+  useEffect(() => {
+    setDraft(camera);
+    setPendingRoi(null);
+    setPreviewRect(null);
+    setDragStart(null);
+    setDraggingVertex(null);
+    setImageAspectRatio(null);
+
+    setPreviewUrl((current) => {
+      if (current && current.startsWith("blob:")) {
+        URL.revokeObjectURL(current);
+      }
+      return camera.snapshotUrl || null;
+    });
+  }, [camera]);
+
+  function clamp(value: number, min: number, max: number) {
+    return Math.min(Math.max(value, min), max);
   }
+
+  function getRenderBounds() {
+    const image = imageRef.current;
+    if (!image) return null;
+    const rect = image.getBoundingClientRect();
+    if (!image.naturalWidth || !image.naturalHeight) return null;
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+    };
+  }
+
+  function pointInPercents(clientX: number, clientY: number) {
+    const bounds = getRenderBounds();
+    if (!bounds) return null;
+    return {
+      x: clamp((clientX - bounds.left) / bounds.width, 0, 1),
+      y: clamp((clientY - bounds.top) / bounds.height, 0, 1),
+    };
+  }
+
+  function renderRectFromPoints(a: { x: number; y: number }, b: { x: number; y: number }) {
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    return {
+      x,
+      y,
+      width: Math.max(0, Math.max(a.x, b.x) - x),
+      height: Math.max(0, Math.max(a.y, b.y) - y),
+    };
+  }
+
+  function styleFromPreviewRect(
+    rect: { x: number; y: number; width: number; height: number } | null,
+  ) {
+    if (!rect) return undefined;
+    return {
+      left: `${rect.x * 100}%`,
+      top: `${rect.y * 100}%`,
+      width: `${rect.width * 100}%`,
+      height: `${rect.height * 100}%`,
+    } as React.CSSProperties;
+  }
+
+  function naturalizeRect(rect: { x: number; y: number; width: number; height: number }) {
+    const bounds = getRenderBounds();
+    if (!bounds) return null;
+    const x = Math.round(rect.x * bounds.naturalWidth);
+    const y = Math.round(rect.y * bounds.naturalHeight);
+    const right = Math.round((rect.x + rect.width) * bounds.naturalWidth);
+    const bottom = Math.round((rect.y + rect.height) * bounds.naturalHeight);
+    return roiFromVertices(
+      [
+        { x, y },
+        { x: right, y },
+        { x: right, y: bottom },
+        { x, y: bottom },
+      ],
+      bounds.naturalWidth,
+      bounds.naturalHeight,
+    );
+  }
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    const point = pointInPercents(event.clientX, event.clientY);
+    if (!point) return;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragStart(point);
+    setPreviewRect({ x: point.x, y: point.y, width: 0, height: 0 });
+    setPendingRoi(null);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (draggingVertex !== null) {
+      const point = pointInPercents(event.clientX, event.clientY);
+      const bounds = getRenderBounds();
+      if (!point || !bounds) return;
+      const vertices = getRoiVertices(pendingRoi ?? draft.roiConfig);
+      vertices[draggingVertex] = {
+        x: Math.round(point.x * bounds.naturalWidth),
+        y: Math.round(point.y * bounds.naturalHeight),
+      };
+      setPendingRoi(roiFromVertices(vertices, bounds.naturalWidth, bounds.naturalHeight));
+      return;
+    }
+    if (!dragStart) return;
+    const point = pointInPercents(event.clientX, event.clientY);
+    if (!point) return;
+    setPreviewRect(renderRectFromPoints(dragStart, point));
+  }
+
+  function finishDrag() {
+    if (draggingVertex !== null) {
+      setDraggingVertex(null);
+      return;
+    }
+    if (!previewRect) {
+      setDragStart(null);
+      return;
+    }
+
+    const candidate = naturalizeRect(previewRect);
+    setDragStart(null);
+    setPreviewRect(null);
+
+    if (!candidate || candidate.width === 0 || candidate.height === 0) {
+      return;
+    }
+
+    setPendingRoi(candidate);
+  }
+
+  function handlePointerUp() {
+    finishDrag();
+  }
+
+  function handlePointerCancel() {
+    setDragStart(null);
+    setPreviewRect(null);
+    setDraggingVertex(null);
+  }
+
+  function beginVertexDrag(event: React.PointerEvent<HTMLButtonElement>, index: number) {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPendingRoi(pendingRoi ?? draft.roiConfig);
+    setPreviewRect(null);
+    setDragStart(null);
+    setDraggingVertex(index);
+  }
+
+  function confirmPendingRoi() {
+    if (!pendingRoi) return;
+    setDraft({ ...draft, roiConfig: pendingRoi });
+    setPendingRoi(null);
+  }
+
+  async function fetchSnapshot() {
+    if (!draft.streamConfig?.ipAddress) {
+      toast.error("Enter a camera IP address before fetching a snapshot.");
+      return;
+    }
+
+    setIsFetchingSnapshot(true);
+    try {
+      const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}/snapshot/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft.streamConfig),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload?.error || `Snapshot test failed (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setPreviewUrl(url);
+      toast.success("Snapshot fetched successfully.");
+    } catch (error) {
+      toast.error("Snapshot fetch failed", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsFetchingSnapshot(false);
+    }
+  }
+
+  async function runEvaluation() {
+    if (!camera.id || camera.id === "draft-camera") {
+      toast.error("Save the camera first before running evaluation.");
+      return;
+    }
+
+    setIsEvaluating(true);
+    try {
+      const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}/evaluate`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || `Evaluation failed (${response.status})`);
+      }
+
+      const result = await response.json();
+      const latestEvaluation = {
+        status: result.status,
+        water_level: result.water_level,
+        water_ratio: result.water_ratio,
+        pixel_detection_accuracy: result.pixel_detection_accuracy,
+        classification_accuracy: result.classification_accuracy,
+        processed_image_path: result.processed_image_path,
+        captured_at: result.timestamp,
+        source: "CameraTest_v0.4.2.py",
+      };
+
+      const nextDraft = { ...draft, last_evaluation: latestEvaluation };
+      setDraft(nextDraft);
+      store.updateCamera(camera.id, nextDraft);
+      toast.success("Evaluation completed", {
+        description: `${result.status} · water level ${result.water_level}`,
+      });
+    } catch (error) {
+      toast.error("Evaluation failed", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsEvaluating(false);
+    }
+  }
+
+  async function save() {
+    if (camera.id === "draft-camera") {
+      await saveAsNew();
+      return;
+    }
+
+    store.updateCamera(camera.id, draft);
+
+    try {
+      const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ camera: draft }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      toast.success("Camera configuration saved", { description: draft.location });
+    } catch (error) {
+      toast.error("Camera configuration could not be synced to MongoDB", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async function saveAsNew() {
+    try {
+      const response = await fetch(`/api/cameras`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ camera: draft }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      const created: Camera = await response.json();
+      store.addCamera(created);
+      toast.success("New camera added", { description: created.location });
+      onCreated?.(created);
+    } catch (error) {
+      toast.error("Could not add new camera to MongoDB", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const image = imageRef.current;
+  const visibleRoi = pendingRoi ?? draft.roiConfig;
+  const visibleVertices =
+    image?.naturalWidth && image.naturalHeight
+      ? getRoiVertices(visibleRoi).map((point) => ({
+          x: Math.min(Math.max(point.x, 0), image.naturalWidth),
+          y: Math.min(Math.max(point.y, 0), image.naturalHeight),
+        }))
+      : [];
 
   return (
     <div className="grid gap-6 lg:grid-cols-5">
       <div className="lg:col-span-3 overflow-hidden rounded-2xl border border-border bg-card">
-        <div className="relative aspect-video w-full overflow-hidden bg-muted">
-          <img src={draft.snapshotUrl} alt={draft.location} className="h-full w-full object-cover" />
-          <div
-            className="pointer-events-none absolute border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]"
-            style={{
-              left: `${(draft.roiConfig.x / 640) * 100}%`,
-              top: `${(draft.roiConfig.y / 400) * 100}%`,
-              width: `${(draft.roiConfig.width / 640) * 100}%`,
-              height: `${(draft.roiConfig.height / 400) * 100}%`,
-            }}
-          >
-            <span className="absolute -top-6 left-0 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary-foreground">
-              ROI
-            </span>
-          </div>
+        <div
+          className={
+            "relative w-full overflow-hidden bg-muted touch-none " +
+            (imageAspectRatio ? `pb-[calc(100%/${imageAspectRatio})]` : "aspect-video")
+          }
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+        >
+          {previewUrl || draft.snapshotUrl ? (
+            <img
+              ref={imageRef}
+              src={previewUrl ?? draft.snapshotUrl}
+              alt={draft.location}
+              className="h-full w-full object-contain"
+              draggable={false}
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                if (img.naturalWidth && img.naturalHeight) {
+                  setImageAspectRatio(img.naturalWidth / img.naturalHeight);
+                }
+              }}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-muted text-center text-sm text-muted-foreground">
+              No snapshot yet. Enter the camera details and fetch a preview.
+            </div>
+          )}
+
+          {visibleVertices.length === 4 && image?.naturalWidth && image.naturalHeight ? (
+            <>
+              <svg
+                className="pointer-events-none absolute inset-0 h-full w-full"
+                viewBox={`0 0 ${image.naturalWidth} ${image.naturalHeight}`}
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
+                <polygon
+                  points={visibleVertices.map((point) => `${point.x},${point.y}`).join(" ")}
+                  fill={pendingRoi ? "rgba(226,232,240,0.12)" : "rgba(59,130,246,0.12)"}
+                  stroke={pendingRoi ? "rgb(226,232,240)" : "var(--primary)"}
+                  strokeWidth="3"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </svg>
+              {visibleVertices.map((point, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  aria-label={`Move ROI vertex ${index + 1}`}
+                  title={`Drag to move ROI vertex ${index + 1}`}
+                  onPointerDown={(event) => beginVertexDrag(event, index)}
+                  className="absolute z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full border-2 border-white bg-primary shadow-md cursor-move"
+                  style={{
+                    left: `${(point.x / image.naturalWidth) * 100}%`,
+                    top: `${(point.y / image.naturalHeight) * 100}%`,
+                  }}
+                />
+              ))}
+            </>
+          ) : null}
+
+          {previewRect ? (
+            <div
+              className="pointer-events-none absolute border-2 border-dashed border-yellow-400/90 bg-yellow-400/10"
+              style={styleFromPreviewRect(previewRect)}
+            />
+          ) : null}
         </div>
+
         <div className="border-t border-border p-4 text-xs text-muted-foreground">
-          Snapshot from {new Date(camera.timestamp).toLocaleString()} — ROI overlay reflects pending changes.
+          Snapshot from {new Date(camera.timestamp).toLocaleString()} — drag to create an ROI or
+          move a corner handle to reshape it, then confirm.
         </div>
+
+        {pendingRoi ? (
+          <div className="border-t border-border bg-muted px-4 py-3 text-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="font-mono text-sm text-foreground">
+                x: {pendingRoi.x} · y: {pendingRoi.y} · width: {pendingRoi.width} · height:{" "}
+                {pendingRoi.height}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={confirmPendingRoi}
+                  className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingRoi(null)}
+                  className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-semibold text-muted-foreground transition hover:bg-accent"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="lg:col-span-2 space-y-5 rounded-2xl border border-border bg-card p-5">
+      <div className="lg:col-span-2 lg:self-start space-y-5 rounded-2xl border border-border bg-card p-5">
         <Field label="Location name">
           <input
             value={draft.location}
@@ -133,82 +695,268 @@ function CameraEditor({ camera }: { camera: Camera }) {
           </Field>
         </div>
 
-        <Section title="Region of Interest (px)">
-          <div className="grid grid-cols-2 gap-3">
-            {(["x", "y", "width", "height"] as const).map((k) => (
-              <Field key={k} label={k.toUpperCase()}>
+        <Section title="Camera Connection">
+          <div className="space-y-3">
+            <Field label="IP address">
+              <input
+                value={draft.streamConfig?.ipAddress ?? ""}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    streamConfig: {
+                      ...draft.streamConfig,
+                      ipAddress: e.target.value,
+                    },
+                  })
+                }
+                className="input"
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Port">
                 <input
                   type="number"
-                  value={draft.roiConfig[k]}
+                  min={1}
+                  max={65535}
+                  value={draft.streamConfig?.port ?? 80}
                   onChange={(e) =>
-                    setDraft({ ...draft, roiConfig: { ...draft.roiConfig, [k]: +e.target.value } })
+                    setDraft({
+                      ...draft,
+                      streamConfig: {
+                        ...draft.streamConfig,
+                        port: Number(e.target.value) || 80,
+                      },
+                    })
                   }
                   className="input"
                 />
               </Field>
-            ))}
+              <Field label="Snapshot path">
+                <input
+                  value={
+                    draft.streamConfig?.snapshotPath ?? "/cgi-bin/snapshot.cgi?channel=1&subtype=0"
+                  }
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      streamConfig: {
+                        ...draft.streamConfig,
+                        snapshotPath: e.target.value,
+                      },
+                    })
+                  }
+                  className="input"
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Username (optional)">
+                <input
+                  value={draft.streamConfig?.username ?? ""}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      streamConfig: {
+                        ...draft.streamConfig,
+                        username: e.target.value,
+                      },
+                    })
+                  }
+                  className="input"
+                />
+              </Field>
+              <Field label="Password (optional)">
+                <input
+                  type="password"
+                  value={draft.streamConfig?.password ?? ""}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      streamConfig: {
+                        ...draft.streamConfig,
+                        password: e.target.value,
+                      },
+                    })
+                  }
+                  className="input"
+                />
+              </Field>
+            </div>
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={fetchSnapshot}
+                disabled={isFetchingSnapshot}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isFetchingSnapshot ? "Fetching snapshot…" : "Fetch snapshot"}
+              </button>
+            </div>
           </div>
         </Section>
 
-        <Section title="HSV Thresholds">
-          <div className="space-y-3">
-            {(
-              [
-                ["h_min", "h_max", "Hue"],
-                ["s_min", "s_max", "Saturation"],
-                ["v_min", "v_max", "Value"],
-              ] as const
-            ).map(([minK, maxK, label]) => (
-              <div key={label}>
-                <div className="mb-1 flex justify-between text-xs">
-                  <span className="font-medium">{label}</span>
-                  <span className="font-mono text-muted-foreground">
-                    {draft.hsvThresholds[minK]} – {draft.hsvThresholds[maxK]}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    max={255}
-                    value={draft.hsvThresholds[minK]}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        hsvThresholds: { ...draft.hsvThresholds, [minK]: +e.target.value },
-                      })
-                    }
-                    className="input"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={255}
-                    value={draft.hsvThresholds[maxK]}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        hsvThresholds: { ...draft.hsvThresholds, [maxK]: +e.target.value },
-                      })
-                    }
-                    className="input"
-                  />
+        <Section title="Region of Interest (px)">
+          <p className="text-xs text-muted-foreground">
+            Drag a box on the snapshot to define the ROI. Confirm before saving.
+          </p>
+        </Section>
+
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <button
+              onClick={runEvaluation}
+              disabled={isEvaluating || camera.id === "draft-camera"}
+              className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isEvaluating ? "Running evaluation…" : "Run evaluation"}
+            </button>
+            <button
+              onClick={save}
+              className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <Save className="h-4 w-4" />
+              Save configuration
+            </button>
+          </div>
+
+          <button
+            onClick={saveAsNew}
+            title="Add the current settings as a brand new camera instead of overwriting this one"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-card px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-accent"
+          >
+            <Plus className="h-4 w-4" />
+            Save as new camera
+          </button>
+        </div>
+
+        {draft.last_evaluation ? (
+          <div className="rounded-xl border border-border bg-muted/40 p-3 text-xs">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="font-semibold uppercase tracking-wide text-muted-foreground">
+                Latest result
+              </span>
+              <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium uppercase text-foreground">
+                {draft.last_evaluation.status ?? "UNKNOWN"}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-muted-foreground">
+              <div>
+                <div className="text-[10px] uppercase">Water level</div>
+                <div className="font-medium text-foreground">
+                  {draft.last_evaluation.water_level ?? "-"}
                 </div>
               </div>
-            ))}
+              <div>
+                <div className="text-[10px] uppercase">Water ratio</div>
+                <div className="font-medium text-foreground">
+                  {draft.last_evaluation.water_ratio ?? "-"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase">PA</div>
+                <div className="font-medium text-foreground">
+                  {draft.last_evaluation.pixel_detection_accuracy ?? "-"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase">CA</div>
+                <div className="font-medium text-foreground">
+                  {draft.last_evaluation.classification_accuracy ?? "-"}
+                </div>
+              </div>
+            </div>
           </div>
-        </Section>
-
-        <button
-          onClick={save}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          <Save className="h-4 w-4" />
-          Save configuration
-        </button>
+        ) : null}
       </div>
 
       <style>{`.input{width:100%;border-radius:.5rem;border:1px solid var(--color-border);background:var(--color-background);padding:.5rem .65rem;font-size:.875rem;outline:none}.input:focus{border-color:var(--color-primary);box-shadow:0 0 0 3px color-mix(in oklab,var(--color-primary) 25%,transparent)}`}</style>
+    </div>
+  );
+}
+
+/**
+ * OpenCV video feed (feed-service): ROIs, marker and dry reference are edited live on the
+ * running feed; only the name and coordinates are saved to MongoDB from here.
+ */
+function FeedCameraEditor({ camera }: { camera: Camera }) {
+  const [draft, setDraft] = useState<Camera>(camera);
+  const [isSaving, setIsSaving] = useState(false);
+
+  async function save() {
+    if (!Number.isFinite(draft.coordinates.lat) || !Number.isFinite(draft.coordinates.lng)) {
+      toast.error("Enter valid coordinates");
+      return;
+    }
+    setIsSaving(true);
+    store.updateCamera(camera.id, {
+      location: draft.location,
+      coordinates: draft.coordinates,
+    });
+    try {
+      const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          camera: { ...camera, location: draft.location, coordinates: draft.coordinates },
+        }),
+      });
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      toast.success("Camera details saved", { description: draft.location });
+    } catch (error) {
+      toast.error("Camera details could not be synced to MongoDB", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-5">
+      <div className="lg:col-span-3">
+        <FeedSetupEditor feedId={camera.feed!.feedId} />
+      </div>
+      <div className="space-y-5 rounded-2xl border border-border bg-card p-5 lg:col-span-2 lg:self-start">
+        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <Video className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Recorded CDRRMO feed <span className="font-mono">{camera.feed!.feedId}</span>, processed
+            by the OpenCV feed service. Readings are written to MongoDB every second.
+          </span>
+        </div>
+        <Field label="Location name">
+          <Input
+            value={draft.location}
+            onChange={(e) => setDraft({ ...draft, location: e.target.value })}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Latitude">
+            <Input
+              type="number"
+              step="0.0001"
+              value={draft.coordinates.lat}
+              onChange={(e) =>
+                setDraft({ ...draft, coordinates: { ...draft.coordinates, lat: +e.target.value } })
+              }
+            />
+          </Field>
+          <Field label="Longitude">
+            <Input
+              type="number"
+              step="0.0001"
+              value={draft.coordinates.lng}
+              onChange={(e) =>
+                setDraft({ ...draft, coordinates: { ...draft.coordinates, lng: +e.target.value } })
+              }
+            />
+          </Field>
+        </div>
+        <Button type="button" className="w-full" onClick={save} disabled={isSaving}>
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving…" : "Save camera details"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -225,7 +973,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </h3>
       {children}
     </div>
   );

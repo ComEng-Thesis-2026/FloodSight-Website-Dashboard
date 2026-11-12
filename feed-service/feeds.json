@@ -1,0 +1,16 @@
+[
+  {
+    "id": "mastersons",
+    "location": "Masterson's Avenue",
+    "video": "videos/mastersons.mp4",
+    "coordinates": { "lat": null, "lng": null },
+    "max_width": 960
+  },
+  {
+    "id": "kauswagan",
+    "location": "Kauswagan Highway",
+    "video": "videos/kauswagan.mp4",
+    "coordinates": { "lat": null, "lng": null },
+    "max_width": 960
+  }
+]

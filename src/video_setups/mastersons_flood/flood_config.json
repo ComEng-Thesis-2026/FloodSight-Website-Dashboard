@@ -1,0 +1,90 @@
+{
+  "camera_id": "mastersons_flood",
+  "frame_size": [
+    1024,
+    576
+  ],
+  "flood_roi": [
+    [
+      433,
+      178
+    ],
+    [
+      494,
+      176
+    ],
+    [
+      1023,
+      491
+    ],
+    [
+      435,
+      575
+    ]
+  ],
+  "marker_roi": [
+    [
+      657,
+      242
+    ],
+    [
+      670,
+      247
+    ],
+    [
+      670,
+      281
+    ],
+    [
+      655,
+      274
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": null,
+  "marker_mode": "physical",
+  "pole_roi": [
+    [
+      657,
+      242
+    ],
+    [
+      670,
+      247
+    ],
+    [
+      670,
+      281
+    ],
+    [
+      655,
+      274
+    ]
+  ],
+  "pole_present": true,
+  "camera_height_m": 4.0,
+  "marker_distance_m": 7.0,
+  "camera_pose": {
+    "tilt_deg": 27.3976,
+    "roll_deg": 16.9813,
+    "height_m": 4.0,
+    "focal_norm": 0.236775,
+    "fit_px": 0.0,
+    "distance_m": 7.0,
+    "focal_px": 242.5,
+    "hfov_deg": 129.3,
+    "pole_ground": [
+      4.1504,
+      5.6369
+    ],
+    "pole_width_m": 0.539
+  },
+  "virtual_base": [
+    3.8324,
+    5.8577
+  ],
+  "virtual_width_m": 0.697,
+  "virtual_base_elev_m": 0.0,
+  "anchor_image": "anchor_mastersons_flood.png"
+}

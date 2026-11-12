@@ -1,0 +1,87 @@
+{
+  "camera_id": "masterson_rain_nonflood1",
+  "frame_size": [
+    940,
+    516
+  ],
+  "flood_roi": [
+    [
+      477,
+      140
+    ],
+    [
+      538,
+      138
+    ],
+    [
+      939,
+      425
+    ],
+    [
+      491,
+      474
+    ]
+  ],
+  "marker_roi": [
+    [
+      654,
+      221
+    ],
+    [
+      667,
+      230
+    ],
+    [
+      668,
+      191
+    ],
+    [
+      655,
+      184
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": null,
+  "marker_mode": "physical",
+  "pole_roi": [
+    [
+      654,
+      221
+    ],
+    [
+      667,
+      230
+    ],
+    [
+      668,
+      191
+    ],
+    [
+      655,
+      184
+    ]
+  ],
+  "pole_present": true,
+  "camera_height_m": 4.0,
+  "marker_distance_m": 7.0,
+  "camera_pose": {
+    "tilt_deg": 28.6718,
+    "roll_deg": 21.9089,
+    "height_m": 4.0,
+    "focal_norm": 0.277516,
+    "fit_px": 0.0,
+    "distance_m": 7.0,
+    "focal_px": 260.9,
+    "hfov_deg": 121.9,
+    "pole_ground": [
+      4.6903,
+      5.1962
+    ],
+    "pole_width_m": 0.545
+  },
+  "virtual_base": null,
+  "virtual_width_m": 0.1,
+  "virtual_base_elev_m": 0.0,
+  "anchor_image": "anchor_masterson_rain_nonflood1.png"
+}

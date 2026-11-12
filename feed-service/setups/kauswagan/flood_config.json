@@ -1,0 +1,58 @@
+{
+  "camera_id": "kauswagan",
+  "frame_size": [
+    960,
+    540
+  ],
+  "flood_roi": [
+    [
+      242,
+      282
+    ],
+    [
+      764,
+      285
+    ],
+    [
+      763,
+      506
+    ],
+    [
+      239,
+      508
+    ]
+  ],
+  "marker_roi": [
+    [
+      453.9,
+      503.7
+    ],
+    [
+      575.3,
+      502.4
+    ],
+    [
+      572.6,
+      299.2
+    ],
+    [
+      461.8,
+      292.6
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": null,
+  "reference_images": {
+    "day": "reference_dry_kauswagan_day_virtual.png"
+  },
+  "marker_locked": true,
+  "virtual_marker": true,
+  "physical_marker_references": {
+    "day": "reference_dry_kauswagan_day.png"
+  },
+  "lens_file": null,
+  "lens_applied": false,
+  "tag_layout": null,
+  "tag_anchors": null
+}

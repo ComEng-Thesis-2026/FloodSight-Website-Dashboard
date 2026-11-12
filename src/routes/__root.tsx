@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
+import { AuthProvider } from "../context/AuthContext.jsx";
 
 function NotFoundComponent() {
   return (
@@ -78,10 +79,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "SUBAY · CCTV Flood Watch" },
-      { name: "description", content: "Real-time CCTV-based flood monitoring for Cagayan de Oro City." },
-      { property: "og:title", content: "SUBAY · CCTV Flood Watch" },
-      { property: "og:description", content: "Real-time CCTV-based flood monitoring for Cagayan de Oro City." },
+      { title: "FloodSight · CCTV Flood Monitoring" },
+      { name: "description", content: "FloodSight is a CCTV-based flood monitoring and routing advisory system for Cagayan de Oro City." },
+      { property: "og:title", content: "FloodSight · CCTV Flood Monitoring" },
+      { property: "og:description", content: "FloodSight is a CCTV-based flood monitoring and routing advisory system for Cagayan de Oro City." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -117,9 +118,11 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
-      <Toaster richColors position="top-right" />
+      <AuthProvider>
+        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+        <Outlet />
+        <Toaster richColors position="top-right" />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

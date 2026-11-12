@@ -1,0 +1,91 @@
+{
+  "camera_id": "flood_test_2",
+  "frame_size": [
+    1280,
+    720
+  ],
+  "flood_roi": [
+    [
+      18,
+      179
+    ],
+    [
+      1272,
+      189
+    ],
+    [
+      1279,
+      572
+    ],
+    [
+      5,
+      581
+    ]
+  ],
+  "marker_roi": [
+    [
+      165.09,
+      1.92
+    ],
+    [
+      490.81,
+      246.45
+    ],
+    [
+      499.88,
+      225.35
+    ],
+    [
+      75.98,
+      -176.01
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": "reference_dry_flood_test_2.png",
+  "reference_image_night": "reference_dry_night_flood_test_2.png",
+  "marker_mode": "virtual",
+  "pole_roi": [
+    [
+      404,
+      146
+    ],
+    [
+      423,
+      146
+    ],
+    [
+      423,
+      186
+    ],
+    [
+      404,
+      186
+    ]
+  ],
+  "pole_present": false,
+  "camera_height_m": 4.0,
+  "marker_distance_m": 7.0,
+  "camera_pose": {
+    "tilt_deg": 4.9519,
+    "roll_deg": -66.6585,
+    "height_m": 4.0,
+    "focal_norm": 0.017917,
+    "fit_px": 1.308,
+    "distance_m": 7.0,
+    "focal_px": 22.9,
+    "hfov_deg": 175.9,
+    "pole_ground": [
+      -6.9938,
+      0.3012
+    ],
+    "pole_width_m": 0.672
+  },
+  "virtual_base": [
+    -6.9938,
+    0.3012
+  ],
+  "virtual_width_m": 0.672,
+  "virtual_base_elev_m": 0.0,
+  "anchor_image": "anchor_flood_test_2.png"
+}

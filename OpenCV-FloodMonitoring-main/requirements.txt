@@ -1,0 +1,4 @@
+# Tested with Python 3.14.5 on Windows 11.
+# OpenCV >= 4.7 is needed for cv2.aruco.ArucoDetector (anchor tags).
+opencv-python==4.13.0.92
+numpy==2.5.0

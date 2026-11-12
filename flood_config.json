@@ -1,0 +1,90 @@
+{
+  "camera_id": "CAM-01",
+  "frame_size": [
+    1920,
+    1080
+  ],
+  "flood_roi": [
+    [
+      1039,
+      793
+    ],
+    [
+      1170,
+      799
+    ],
+    [
+      1174,
+      895
+    ],
+    [
+      1025,
+      891
+    ]
+  ],
+  "marker_roi": [
+    [
+      1074.98,
+      859.79
+    ],
+    [
+      1146.1,
+      862.19
+    ],
+    [
+      1155.4,
+      571.98
+    ],
+    [
+      1080.69,
+      570.0
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": "reference_dry_CAM-01.png",
+  "marker_mode": "virtual",
+  "pole_roi": [
+    [
+      1084,
+      571
+    ],
+    [
+      1152,
+      571
+    ],
+    [
+      1146,
+      863
+    ],
+    [
+      1075,
+      859
+    ]
+  ],
+  "pole_present": false,
+  "camera_height_m": 4.0,
+  "marker_distance_m": 7.0,
+  "camera_pose": {
+    "tilt_deg": 22.5409,
+    "roll_deg": 0.017,
+    "height_m": 4.0,
+    "focal_norm": 1.312299,
+    "fit_px": 0.0,
+    "distance_m": 7.0,
+    "focal_px": 2519.6,
+    "hfov_deg": 41.7,
+    "pole_ground": [
+      0.4766,
+      6.9838
+    ],
+    "pole_width_m": 0.225
+  },
+  "virtual_base": [
+    0.4766,
+    6.9838
+  ],
+  "virtual_width_m": 0.225,
+  "virtual_base_elev_m": 0.0,
+  "anchor_image": "anchor_CAM-01.png"
+}
