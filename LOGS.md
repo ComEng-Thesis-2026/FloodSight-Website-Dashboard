@@ -110,3 +110,57 @@ Failures Flag:
 Verification:
 - Confirmed `/`, `/map-view`, and `/config` all return HTTP 200 on the local dev server (`http://localhost:8081`).
 - Could not click through the authenticated UI end-to-end in this session (Google sign-in required); recommend a manual pass to confirm the Map View tab, sidebar notification-click navigation, the mobile drawer at narrow widths, and the new camera picker grid/filter.
+
+Date: 11/03/2026                   Time: 06:05 PM
+Changes Made:
+- Fixed the water level staying frozen at its peak during a flood RECESSION (level only came down after the flood had fully disappeared), in both Kalman implementations:
+  - `src/FloodMonitoring2.py` (`FloodKalman`): added a sustained-descent "follow" mode. A receding water line keeps moving, so the old steady-confirmation could never accept the fall (readings are never steady at one level while the line slides) and the reported level stayed at the peak until the flood was gone. Now, once raw readings slide continuously downward for `--fall-trend` seconds (new option, default 1.5 s), the filter follows the water line down; occlusions (car/person) only ever RAISE the reading, so a persistent slide is real recession. The filter's rate state is seeded with the observed slide slope for smooth tracking. Also: a steady fall no longer doubles its confirmation time when the road flood coverage does not drop in agreement (the road stays wet long after the line recedes), and the `persist_s` requirement is now based on motion in the recent window instead of the episode-wide `episode_motion` latch (one car at the start of an event used to force 20 s for the whole episode).
+  - `FloodMonitoring.py` (`FloodKalman`): the innovation gate now only rejects sudden RISES (occlusions raise the reading, they never lower it); sudden drops are applied immediately, so a fast recession (or a car revealing the true line as it passes) tracks in real time instead of being held as a "sudden drop" anomaly. A persisted anomaly whose held median sits clearly BELOW the level is re-locked even without stationarity.
+- Updated both class docstrings and the `--fall-confirm` help text accordingly.
+Failures Flag:
+- None observed. Synthetic tests cover recession tracking, car-spike rejection, flood-disappearance, and rise confirmation for both filters (all pass).
+Verification:
+- Synthetic filter test (10 fps simulated readings): gradual recession 0.80 -> 0.05 m now tracks (0.37 m halfway, < 0.10 m near the end) where the old logic held 0.80 m; a 1.5 s car spike to 1.00 m is still rejected in both filters; a raw drop to 0 m reaches 0.13 m within ~4 s (FM2) / ~2 s (FM1) instead of waiting persist_s = 20 s; a steady rise to 0.30 m still confirms within ~4 s.
+- `FloodDetection_Video.py` forwards the new `--fall-trend` option via `fm.parse_args(rest)` with no changes needed.
+Next Steps:
+- Re-run `FloodDetection_Video.py` on the flood_test_2 / flood_test_3 / mastersons_flood footage and compare the new results CSVs against today's earlier runs to confirm the recession tracks on real footage.
+
+Date: 11/10/2026                   Time: 04:40 PM
+Changes Made:
+- Integrated the OpenCV flood monitoring program (OpenCV-FloodMonitoring-main/floodmon, used unchanged as a library) into the dashboard as two recorded CDRRMO camera feeds: Masterson's Avenue (`mastersons`) and Kauswagan Highway (`kauswagan`).
+- New Python feed service `feed-service/` (`npm run feeds`, http://127.0.0.1:8765):
+  - `worker.py`: one headless worker per feed. It plays the clip in real time and in a loop, skipping frames if processing falls behind, and runs floodmon's `Monitor` on every frame. It publishes a clean JPEG and an annotated one (`draw_overlay`) plus the payload.
+    - Each loop restarts the Kalman filter and status, so the dry scene reads 0 m again.
+    - Setup commands are applied between frames: set ROIs / reference height, dry reference (`b`), virtual marker lock/convert (`x`), unlock (Shift+X), save (`s`), restart video.
+  - `mongo_sink.py`: updates the camera document `feed-<id>` in `MONGODB_COLLECTION` every second. Fields: `water_level`, `status` (SAFE→NORMAL), `roi_config`, `opencv_setup`, and `feed` metrics.
+    - Also inserts one reading per second plus one per event into `flood_readings` (`MONGODB_READINGS_COLLECTION`). Each reading has latency fields (`processing_ms`, `camera_update_ms`, `frame_to_write_ms`).
+    - Location and coordinates are only set on insert, so edits on /config are kept.
+  - `server.py`: local HTTP API with MJPEG stream (`?overlay=1|0`), frame, reading, setup GET/PUT (validated, 400 with problems) and actions.
+- `src/lib/feed-service.server.ts` + `src/server.ts`: `/api/feeds/*` proxies to the feed service, streams included. Added `GET /api/cameras/:id/readings?minutes=10` (`getFeedReadings` in `src/lib/db.server.ts`).
+- `src/lib/floodsight/types.ts`: `statusFromLevel` now uses the OpenCV bands (ALERT ≥ 0.30 m, DANGER ≥ 0.50 m; previously 0.5 / 1.5 m). Added `FeedInfo`, `FeedPayload`, `FeedSetup` and `FeedHistoryPoint`; `Camera.feed` is optional.
+- `src/lib/db.server.ts`: maps the `feed` sub-document. Feed snapshots come from `/api/feeds/<id>/frame.jpg`. A /config save no longer overwrites a feed camera's live fields. Camera `_id` is typed as `ObjectId | string`.
+- Dashboard (`src/routes/_auth.index.tsx`):
+  - Feed cards show a still frame and an "OpenCV" badge.
+  - The detail panel plays the live stream (`LiveFeedPlayer`) with an "OpenCV overlay" switch; the switch only changes the display.
+  - Live OpenCV metrics (`FeedMetrics`, 1 s) and a 10-minute water-level trend from MongoDB (`WaterLevelTrend`).
+  - Fixed the empty-state button linking to `/_auth/config` (now `/config`).
+- Camera Config (`src/routes/_auth.config.tsx`): feed cameras open `FeedSetupEditor`:
+  - draggable flood polygon (add/remove points) and 4-corner marker on the live video
+  - reference height, Apply ROI, Capture dry reference, Restart video, Lock/Convert virtual marker, Unlock, Save
+  - location/coordinates saved via PATCH as before
+- New tokens `--roi-flood` and `--roi-marker` (light and dark) in `src/styles.css`. npm scripts `feeds` and `test:feeds`. `.env.example` and `.gitignore` updated (videos stay local). `SPEC.md` updated.
+Failures Flag:
+- Overlay leaked into the clean view: `enhance_for_display` can return the same array, and `draw_overlay` draws in place. Fixed by encoding the clean frame first and drawing on a copy; a regression test was added.
+- Flaky test found: a missing-video feed changed state before its "Video not found" frame was published. The placeholder is now published first; six repeated runs then passed.
+- The two edited CDRRMO clips are not on this PC yet: both feeds show "Video not found" until `feed-service/videos/mastersons.mp4` and `kauswagan.mp4` are added. Map coordinates are still placeholders (dashboard default 8.482, 124.643).
+- A synthetic test clip rising 5.6 cm/s was held as a "sudden spike" by floodmon's Kalman filter (by design); the tests use floodmon's standard `quick` scene instead.
+- Not changed: pre-existing type errors in `src/server.ts` (Buffer body) and `src/routes/_auth.config.tsx` (StreamConfig, `.jsx` declarations). /api/feeds setup and actions, like the existing PATCH /api/cameras, have no server-side admin check (admin is enforced in the UI only).
+Verification:
+- `npm run test:feeds`: 13 tests pass. They cover validation, MongoDB document mapping, events, measuring/streaming/looping on a synthetic flood (reaches SAFE→ALERT→DANGER), loop reset, all commands, the missing-video state and the HTTP endpoints including MJPEG.
+- Stand-in run with `Downloads/mastersons_flood.mp4`: 30 fps real time, about 18–21 ms per frame, no skipped frames, about 10 stream fps. This went through the Vite proxy, with MongoDB pointed at temporary collections that were dropped afterwards.
+  - The camera documents and readings were written. `/api/cameras` returned both feeds; the readings endpoint returned the stored history.
+  - The setup PUT, invalid-setup 400, guarded dry-reference capture and restart behaved as expected.
+- Playwright screenshots of the dashboard (overlay on/off, metrics, trend), Camera Config editor and mobile width: no console errors.
+- `npm run build` succeeds; ESLint is clean on the changed files.
+Next Steps:
+- Copy the two edited clips into `feed-service/videos/`, add the coordinates, then do the first-time setup of each feed on /config (see `feed-service/README.md`).

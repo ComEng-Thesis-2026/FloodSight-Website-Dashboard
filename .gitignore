@@ -30,3 +30,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+__pycache__/
+
+# OpenCV feed service: the CDRRMO clips are large and stay local
+feed-service/videos/*
+!feed-service/videos/README.md
+
+# Personal notes and paper drafts stay local
+PROMPTS/
+progress_report/
+src/FloodMonitoring2 copy.py

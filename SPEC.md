@@ -9,7 +9,7 @@ subtitle: FloodSight Flood Monitoring Dashboard
 
 FloodSight is a web-based flood monitoring dashboard for Cagayan de Oro City that helps authorized users monitor CCTV-based flood conditions in real time. The platform combines a live camera feed experience, a map-based overview of flood-prone locations, and role-based administrative controls for managing camera configuration and user access.
 
-The current implementation is a frontend prototype that simulates live flood updates and uses seeded demo data. It should be treated as a functional dashboard foundation that can later be connected to real CCTV streams, sensors, and backend services.
+The current implementation reads camera data from MongoDB. Two camera feeds, Masterson's Avenue and Kauswagan Highway, are recorded clips from CDRRMO's Facebook Live camera feed. The OpenCV feed service plays each clip in a loop and measures it live with the OpenCV flood monitoring program (`feed-service/`). This simulates a live CCTV feed. Other cameras use a snapshot proxy or demo data.
 
 ## 2. Project Goal
 
@@ -57,10 +57,31 @@ Build a responsive, modern dashboard that allows users to:
   - snapshot URL,
   - ROI configuration,
   - HSV thresholds.
-- The dashboard should derive flood status from water level thresholds.
+- The dashboard should derive flood status from water level thresholds. They are the same bands as the OpenCV program uses on its 1 m marker: NORMAL (OpenCV: SAFE) below 0.30 m, ALERT from 0.30 m to below 0.50 m, DANGER from 0.50 m.
 - The UI should display the current water level in centimeters and the most recent update time.
 
-### 4.4 Camera Configuration Page
+### 4.4 OpenCV Video Feeds
+
+- Each feed camera must play its recorded clip as a live video in the dashboard detail panel.
+- An "OpenCV overlay" toggle must show or hide the OpenCV view (ROIs, water tint, gauge, level panel). Measuring continues while the overlay is hidden.
+- The detail panel must show the live OpenCV metrics:
+  - water level and status
+  - road flood coverage and confidence
+  - rate and resolution
+  - image quality, marker mode and processing speed
+- The detail panel must also show a 10-minute water-level trend read from MongoDB.
+- Every reading must be stored in MongoDB:
+  - the camera document is updated every second
+  - the `flood_readings` collection gets one document per second plus one per event, with latency fields
+- On the Camera Configuration page, admins must be able to edit a feed's setup the same way as in the stand-alone OpenCV program:
+  - flood ROI polygon
+  - 4-corner marker ROI
+  - reference height
+  - dry reference capture
+  - virtual marker lock, convert and unlock
+  - save and restart video
+
+### 4.5 Camera Configuration Page
 
 - Admin users must be able to open a configuration page for each camera.
 - The page must allow editing of:
@@ -71,7 +92,7 @@ Build a responsive, modern dashboard that allows users to:
 - The page must preview the ROI overlay on the camera snapshot.
 - Changes must be saved and reflected in the dashboard state.
 
-### 4.5 User Access Management
+### 4.6 User Access Management
 
 - Admin users must be able to add new users by entering a name, email, and role.
 - Supported roles are:
@@ -102,6 +123,8 @@ The project should be built using the following stack:
 - Leaflet for interactive map rendering
 - Lucide React for icons
 - Local storage-backed demo state for current prototype behavior
+- MongoDB (Node `mongodb` driver) for camera data and stored readings
+- Python OpenCV feed service (`feed-service/`, Python 3.13, OpenCV, NumPy, pymongo). It uses the `floodmon` package from `OpenCV-FloodMonitoring-main/` unchanged and is proxied as `/api/feeds/*`.
 
 ## 7. Data Model Notes
 
@@ -150,7 +173,7 @@ The current implementation uses a structured in-browser store with seeded camera
 
 ## 10. Out of Scope for This Version
 
-- Live integration with real CCTV streams or external camera APIs
+- Live integration with real CCTV streams or external camera APIs. The OpenCV feeds play recorded CDRRMO clips in a loop to simulate live feeds.
 - Real-time sensor ingestion from physical flood monitoring devices
 - Full backend/database persistence beyond the existing prototype state
 - Payment, reporting, or public-facing citizen portal features

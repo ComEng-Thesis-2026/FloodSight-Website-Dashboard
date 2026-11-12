@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+recordings/
+logs/
+out/
+*.mp4
+*.avi
+reference_dry_*.png

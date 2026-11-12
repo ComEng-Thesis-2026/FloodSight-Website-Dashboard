@@ -1,0 +1,15 @@
+{
+  "camera_id": "6a9ba725e7711ec3a68b06d8",
+  "timestamp": "20261003T093258768766Z",
+  "tcapture_ms": 267.707,
+  "tprocessing_ms": 29.711,
+  "thsv_classification_ms": 17.827,
+  "tkalman_ms": 2.971,
+  "tdb_write_ms": 69.544,
+  "tsync_ms": 0.0,
+  "troute_ms": 0.0,
+  "Tresponse_ms": 367.08,
+  "pixel_detection_accuracy": 1.0,
+  "classification_accuracy": 0.8589,
+  "processed_image_path": "C:\\Users\\ADMIN\\Desktop\\Thesis\\Website Dashboard\\flood-monitoring\\paper_results\\images\\6a9ba725e7711ec3a68b06d8_20261003T093258768766Z.png"
+}

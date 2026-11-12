@@ -1,0 +1,91 @@
+{
+  "camera_id": "CAM-01",
+  "frame_size": [
+    1920,
+    1080
+  ],
+  "flood_roi": [
+    [
+      1066,
+      458
+    ],
+    [
+      1135,
+      458
+    ],
+    [
+      1135,
+      504
+    ],
+    [
+      1066,
+      504
+    ]
+  ],
+  "marker_roi": [
+    [
+      1085,
+      323
+    ],
+    [
+      1121,
+      322
+    ],
+    [
+      1112,
+      484
+    ],
+    [
+      1078,
+      483
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": "reference_dry_CAM-01.png",
+  "reference_image_night": "reference_dry_night_CAM-01.png",
+  "marker_mode": "physical",
+  "pole_roi": [
+    [
+      1085,
+      323
+    ],
+    [
+      1121,
+      322
+    ],
+    [
+      1112,
+      484
+    ],
+    [
+      1078,
+      483
+    ]
+  ],
+  "pole_present": true,
+  "camera_height_m": 4.0,
+  "marker_distance_m": 7.0,
+  "camera_pose": {
+    "tilt_deg": 32.174,
+    "roll_deg": 0.5853,
+    "height_m": 4.0,
+    "focal_norm": 0.723079,
+    "fit_px": 0.0,
+    "distance_m": 7.0,
+    "focal_px": 1388.3,
+    "hfov_deg": 69.3,
+    "pole_ground": [
+      0.7829,
+      6.9561
+    ],
+    "pole_width_m": 0.196
+  },
+  "virtual_base": [
+    0.8362,
+    6.9499
+  ],
+  "virtual_width_m": 0.196,
+  "virtual_base_elev_m": 0.0,
+  "anchor_image": "anchor_CAM-01.png"
+}

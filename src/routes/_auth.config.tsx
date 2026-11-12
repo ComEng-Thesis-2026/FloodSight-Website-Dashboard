@@ -1,6 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { Plus, Save, Search, ShieldAlert } from "lucide-react";
+import { Plus, Save, Search, ShieldAlert, Video } from "lucide-react";
+import { FeedSetupEditor } from "@/components/floodsight/FeedSetupEditor";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { store, useStore } from "@/lib/floodsight/store";
 import { useAuth } from "@/context/AuthContext.jsx";
 import type { Camera, FloodStatus, RoiPoint } from "@/lib/floodsight/types";
@@ -208,11 +211,15 @@ function ConfigPage() {
         ) : null}
       </div>
 
-      <CameraEditor
-        key={active.id}
-        camera={active}
-        onCreated={(created) => setActiveId(created.id)}
-      />
+      {active.feed ? (
+        <FeedCameraEditor key={active.id} camera={active} />
+      ) : (
+        <CameraEditor
+          key={active.id}
+          camera={active}
+          onCreated={(created) => setActiveId(created.id)}
+        />
+      )}
     </div>
   );
 }
@@ -470,7 +477,7 @@ function CameraEditor({
         classification_accuracy: result.classification_accuracy,
         processed_image_path: result.processed_image_path,
         captured_at: result.timestamp,
-        source: "CameraTest_v0.4.py",
+        source: "CameraTest_v0.4.2.py",
       };
 
       const nextDraft = { ...draft, last_evaluation: latestEvaluation };
@@ -863,6 +870,93 @@ function CameraEditor({
       </div>
 
       <style>{`.input{width:100%;border-radius:.5rem;border:1px solid var(--color-border);background:var(--color-background);padding:.5rem .65rem;font-size:.875rem;outline:none}.input:focus{border-color:var(--color-primary);box-shadow:0 0 0 3px color-mix(in oklab,var(--color-primary) 25%,transparent)}`}</style>
+    </div>
+  );
+}
+
+/**
+ * OpenCV video feed (feed-service): ROIs, marker and dry reference are edited live on the
+ * running feed; only the name and coordinates are saved to MongoDB from here.
+ */
+function FeedCameraEditor({ camera }: { camera: Camera }) {
+  const [draft, setDraft] = useState<Camera>(camera);
+  const [isSaving, setIsSaving] = useState(false);
+
+  async function save() {
+    if (!Number.isFinite(draft.coordinates.lat) || !Number.isFinite(draft.coordinates.lng)) {
+      toast.error("Enter valid coordinates");
+      return;
+    }
+    setIsSaving(true);
+    store.updateCamera(camera.id, {
+      location: draft.location,
+      coordinates: draft.coordinates,
+    });
+    try {
+      const response = await fetch(`/api/cameras/${encodeURIComponent(camera.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          camera: { ...camera, location: draft.location, coordinates: draft.coordinates },
+        }),
+      });
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      toast.success("Camera details saved", { description: draft.location });
+    } catch (error) {
+      toast.error("Camera details could not be synced to MongoDB", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-5">
+      <div className="lg:col-span-3">
+        <FeedSetupEditor feedId={camera.feed!.feedId} />
+      </div>
+      <div className="space-y-5 rounded-2xl border border-border bg-card p-5 lg:col-span-2 lg:self-start">
+        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <Video className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Recorded CDRRMO feed <span className="font-mono">{camera.feed!.feedId}</span>, processed
+            by the OpenCV feed service. Readings are written to MongoDB every second.
+          </span>
+        </div>
+        <Field label="Location name">
+          <Input
+            value={draft.location}
+            onChange={(e) => setDraft({ ...draft, location: e.target.value })}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Latitude">
+            <Input
+              type="number"
+              step="0.0001"
+              value={draft.coordinates.lat}
+              onChange={(e) =>
+                setDraft({ ...draft, coordinates: { ...draft.coordinates, lat: +e.target.value } })
+              }
+            />
+          </Field>
+          <Field label="Longitude">
+            <Input
+              type="number"
+              step="0.0001"
+              value={draft.coordinates.lng}
+              onChange={(e) =>
+                setDraft({ ...draft, coordinates: { ...draft.coordinates, lng: +e.target.value } })
+              }
+            />
+          </Field>
+        </div>
+        <Button type="button" className="w-full" onClick={save} disabled={isSaving}>
+          <Save className="h-4 w-4" />
+          {isSaving ? "Saving…" : "Save camera details"}
+        </Button>
+      </div>
     </div>
   );
 }

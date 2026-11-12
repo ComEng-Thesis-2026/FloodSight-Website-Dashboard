@@ -1,0 +1,91 @@
+{
+  "camera_id": "flood_test",
+  "frame_size": [
+    1312,
+    720
+  ],
+  "flood_roi": [
+    [
+      661,
+      202
+    ],
+    [
+      764,
+      201
+    ],
+    [
+      1293,
+      573
+    ],
+    [
+      659,
+      690
+    ]
+  ],
+  "marker_roi": [
+    [
+      874,
+      242
+    ],
+    [
+      889,
+      242
+    ],
+    [
+      889,
+      293
+    ],
+    [
+      874,
+      293
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": "reference_dry_flood_test.png",
+  "reference_image_night": null,
+  "marker_mode": "physical",
+  "pole_roi": [
+    [
+      874,
+      242
+    ],
+    [
+      889,
+      242
+    ],
+    [
+      889,
+      293
+    ],
+    [
+      874,
+      293
+    ]
+  ],
+  "pole_present": true,
+  "camera_height_m": 4.0,
+  "marker_distance_m": 7.0,
+  "camera_pose": {
+    "tilt_deg": 32.021,
+    "roll_deg": 22.9771,
+    "height_m": 4.0,
+    "focal_norm": 0.275352,
+    "fit_px": 0.0,
+    "distance_m": 7.0,
+    "focal_px": 361.3,
+    "hfov_deg": 122.3,
+    "pole_ground": [
+      4.3717,
+      5.467
+    ],
+    "pole_width_m": 0.243
+  },
+  "virtual_base": [
+    4.6464,
+    5.2356
+  ],
+  "virtual_width_m": 0.76,
+  "virtual_base_elev_m": 0.0,
+  "anchor_image": "anchor_flood_test.png"
+}

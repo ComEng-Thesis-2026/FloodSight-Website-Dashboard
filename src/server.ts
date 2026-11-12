@@ -5,7 +5,13 @@ import path from "node:path";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
-import { getCameraFeeds, updateCameraFeed, createCameraFeed } from "./lib/db.server";
+import {
+  getCameraFeeds,
+  updateCameraFeed,
+  createCameraFeed,
+  getFeedReadings,
+} from "./lib/db.server";
+import { proxyFeedRequest } from "./lib/feed-service.server.ts";
 import {
   fetchCameraSnapshot,
   CameraAuthError,
@@ -53,6 +59,11 @@ export default {
     try {
       const url = new URL(request.url);
 
+      if (url.pathname === "/api/feeds" || url.pathname.startsWith("/api/feeds/")) {
+        const subPath = url.pathname.slice("/api/feeds".length).replace(/^\/+|\/+$/g, "");
+        return await proxyFeedRequest(request, subPath);
+      }
+
       if (url.pathname === "/api/cameras") {
         if (request.method === "GET") {
           const feeds = await getCameraFeeds();
@@ -94,6 +105,32 @@ export default {
         const [cameraId, ...rest] = route.split("/");
         const subPath = rest.join("/");
 
+        if (subPath === "readings" && request.method === "GET") {
+          const minutesParam = Number(url.searchParams.get("minutes") ?? 10);
+          if (!Number.isFinite(minutesParam) || minutesParam <= 0 || minutesParam > 24 * 60) {
+            return new Response(
+              JSON.stringify({ error: "minutes must be a number between 0 and 1440" }),
+              { status: 400, headers: { "content-type": "application/json; charset=utf-8" } },
+            );
+          }
+          try {
+            const readings = await getFeedReadings(decodeURIComponent(cameraId), minutesParam);
+            return new Response(JSON.stringify(readings), {
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": "no-store",
+              },
+            });
+          } catch (error) {
+            return new Response(
+              JSON.stringify({
+                error: error instanceof Error ? error.message : "Could not read flood readings",
+              }),
+              { status: 500, headers: { "content-type": "application/json; charset=utf-8" } },
+            );
+          }
+        }
+
         if (subPath === "snapshot/test" && request.method === "POST") {
           try {
             const streamConfig = await request.json();
@@ -113,7 +150,7 @@ export default {
             });
           } catch (error) {
             let status = 500;
-            let message = error instanceof Error ? error.message : "Snapshot fetch failed";
+            const message = error instanceof Error ? error.message : "Snapshot fetch failed";
             if (error instanceof CameraTimeoutError) status = 504;
             else if (error instanceof CameraAuthError) status = 401;
             else if (error instanceof CameraUnreachableError) status = 502;
@@ -146,7 +183,7 @@ export default {
             });
           } catch (error) {
             let status = 500;
-            let message = error instanceof Error ? error.message : "Snapshot proxy failed";
+            const message = error instanceof Error ? error.message : "Snapshot proxy failed";
             if (error instanceof CameraTimeoutError) status = 504;
             else if (error instanceof CameraAuthError) status = 401;
             else if (error instanceof CameraUnreachableError) status = 502;
@@ -162,19 +199,20 @@ export default {
         if (subPath === "evaluate" && request.method === "POST") {
           try {
             const scriptPath = path.resolve(process.cwd(), "cameraTest.py");
-            const pythonExecutable = process.env.PYTHON_BIN ?? (process.platform === "win32" ? "py" : "python");
-            const pythonArgs = process.platform === "win32" && !process.env.PYTHON_BIN
-              ? ["-3.11", scriptPath, "--camera-id", cameraId]
-              : [scriptPath, "--camera-id", cameraId];
+            const pythonExecutable =
+              process.env.PYTHON_BIN ??
+              path.resolve(
+                process.cwd(),
+                ".venv",
+                process.platform === "win32" ? "Scripts" : "bin",
+                process.platform === "win32" ? "python.exe" : "python",
+              );
+            const pythonArgs = [scriptPath, "--camera-id", cameraId];
 
-            const child = spawn(
-              pythonExecutable,
-              pythonArgs,
-              {
-                cwd: process.cwd(),
-                env: process.env,
-              },
-            );
+            const child = spawn(pythonExecutable, pythonArgs, {
+              cwd: process.cwd(),
+              env: process.env,
+            });
 
             let stdout = "";
             let stderr = "";
@@ -203,11 +241,16 @@ export default {
             }
 
             return new Response(JSON.stringify(payload), {
-              headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": "no-store",
+              },
             });
           } catch (error) {
             return new Response(
-              JSON.stringify({ error: error instanceof Error ? error.message : "Evaluation failed" }),
+              JSON.stringify({
+                error: error instanceof Error ? error.message : "Evaluation failed",
+              }),
               {
                 status: 500,
                 headers: { "content-type": "application/json; charset=utf-8" },
@@ -232,10 +275,13 @@ export default {
               headers: { "content-type": "application/json; charset=utf-8" },
             });
           } catch (error) {
-            return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Update failed" }), {
-              status: 500,
-              headers: { "content-type": "application/json; charset=utf-8" },
-            });
+            return new Response(
+              JSON.stringify({ error: error instanceof Error ? error.message : "Update failed" }),
+              {
+                status: 500,
+                headers: { "content-type": "application/json; charset=utf-8" },
+              },
+            );
           }
         }
       }
