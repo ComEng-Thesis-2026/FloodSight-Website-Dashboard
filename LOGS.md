@@ -164,3 +164,42 @@ Verification:
 - `npm run build` succeeds; ESLint is clean on the changed files.
 Next Steps:
 - Copy the two edited clips into `feed-service/videos/`, add the coordinates, then do the first-time setup of each feed on /config (see `feed-service/README.md`).
+
+Date: 11/16/2026                   Time: 09:45 PM
+Changes Made:
+- Measurement captures for the two video feeds (Masterson's Avenue, Kauswagan Highway), per `PROMPTS/camera-config-metrics-to-mongodb.md`:
+  - New `feed-service/metrics_capture.py`. A capture is taken on every event (start, status change, obstruction, lighting change) and every 10 s of video (`--capture-interval`), only while the feed is calibrated and measuring.
+  - Saved locally in `feed-service/captures/<feed id>/` (git-ignored): the clean frame JPEG, the annotated `_processed.jpg`, a `.json` with the same data, and a `summary.csv` row (the `paper_results/summary.csv` columns plus the feed fields). The snapshot is not stored in MongoDB; the document only names the local files.
+  - New MongoDB collection `camera_metrics` in `CCTVs` (`MONGODB_METRICS_COLLECTION`). Each document has the water level, flood status (NORMAL/ALERT/DANGER), the OpenCV metrics (coverage, confidence, data validity, anomaly, image quality, marker mode, fps), `pixel_detection_accuracy`, `classification_accuracy` with their inputs, and a `latency` breakdown using the `cameraTest.py` names.
+  - PA and CA use `cameraTest.py`'s `compute_accuracy`, self-referenced as there (no ground truth): PA is therefore always 1.0; CA compares the level (as a fraction of the marker height) with the flood ROI coverage.
+  - Latency stages are timed on the frame, not estimated: `feed-service/worker.py` wraps this feed's `FloodDetector.process` and `FloodKalman.step` instances with timers (floodmon itself unchanged) and times frame decoding (`LoopingClip.last_read_ms`). `troute_ms` stays 0 as in `cameraTest.py`.
+- `feed-service/server.py`: options `--no-captures`, `--capture-interval`, `--captures-dir`; `GET /feeds` reports the recorder under `db.metrics`.
+- `.env.example`, `.gitignore`, `SPEC.md` and `feed-service/README.md` updated.
+Failures Flag:
+- First live run: the recorder connected to MongoDB on the first capture, so the first captures had `Tresponse_ms` of 0.9-1.4 s. It now connects when it starts; later captures read about 130-190 ms.
+- Kauswagan (existing detection behaviour, not changed here): during the flood the image quality is rated POOR ("too dark / too noisy"), so floodmon holds the level at 0.00 m / SAFE while the raw level reads ~1.0 m and coverage ~100 %. The captures record this as is (CA ~0.00 on those frames).
+- Masterson's Avenue: `mastersons.mp4` was added, but the feed has no saved ROIs yet (default ROIs, not calibrated), so it produces no captures until its first-time setup is done on Camera Config.
+Verification:
+- `npm run test:feeds`: 17 tests pass (4 new: the accuracy formula, the capture scheduler, the recorder writing metrics but no image data, and a worker run on the synthetic flood that captures both events and intervals, including ALERT/DANGER status changes, with timed stages).
+- Live run on `kauswagan.mp4` against Atlas: documents appear in `CCTVs.camera_metrics` with all fields; every capture written (`db_writes` = `captures`, 0 dropped); the local JPEG/JSON files and `summary.csv` match the documents.
+Next Steps:
+- Do the first-time setup of the Masterson's feed on /config (flood ROI, marker ROI, reference height, dry reference, save); its captures then start automatically.
+- Look into the Kauswagan POOR image-quality hold during the flood.
+
+Date: 11/17/2026                   Time: 05:30 PM
+Changes Made:
+- Camera Config: new **Pause video** / **Play video** button for the OpenCV feeds, so the dry reference can be captured on a still, dry frame (Restart video -> Pause video -> Capture dry reference -> Play video).
+  - `feed-service/worker.py`: new `pause` / `resume` actions. While paused the clip position is frozen but the frame is still measured, so a dry reference capture completes on it; the clock keeps running (Kalman needs it) and on resume the clip continues where it stopped without catch-up skipping. Restart while paused shows the first (dry) frame and stays paused. No metrics captures are recorded while paused. `paused` is reported in the setup and the reading.
+  - `FeedSetupEditor.tsx`: Pause/Play next to Restart video, Capture dry reference on its own row, a "Paused" chip.
+- `feed-service/server.py`: takes port 8765 exclusively on Windows, so a second copy of the service refuses to start instead of sharing the port with the old one.
+- Kauswagan clip replaced (`feed-service/videos/kauswagan.mp4`, local only).
+- `CameraTest_v0.4.py`: the camera password comes from the `CAMERA_PASSWORD` environment variable instead of the file.
+Failures Flag:
+- First pause crashed the feed after ~2 s: floodmon flags identical frames for `--frozen-s` (2 s) as a FROZEN camera, and `draw_overlay` crashes on a measurement without masks; the feed restarted unpaused. Fixed in the worker (floodmon unchanged): the frozen timer is reset while deliberately paused, and the overlay skips the water tint for mask-less (hard failure) measurements.
+- Two feed services were running on port 8765 at once (Windows SO_REUSEADDR), so the dashboard kept reaching the old code; fixed by the exclusive bind above.
+Verification:
+- `npm run test:feeds`: 18 tests pass (new: pause/resume, including staying paused past the frozen limit, restart while paused, and a dry reference capture while paused).
+- Live run on the real Kauswagan clip: paused 8 s without errors, dry reference captured on the first press, resumed at normal speed.
+Next Steps:
+- Kauswagan: the new clip still uses the old clip's ROIs, virtual marker and dry reference; redo them if the view changed.
+- Kauswagan's virtual marker is unlocked and the website cannot lock it again or redo the conversion once virtual.

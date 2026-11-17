@@ -4,11 +4,13 @@ FloodSight feed service - the OpenCV flood monitoring program behind the dashboa
 
 Plays each video in feeds.json in a loop, runs the floodmon pipeline from
 OpenCV-FloodMonitoring-main on every frame, streams the clean and the annotated
-video (MJPEG), accepts ROI / marker changes from the Camera Config page and
-writes every reading to MongoDB.
+video (MJPEG), accepts ROI / marker changes from the Camera Config page,
+writes every reading to MongoDB and saves measurement captures (snapshot locally,
+metrics in MongoDB; see metrics_capture.py).
 
     npm run feeds                                   (from the project root)
     .venv\\Scripts\\python.exe feed-service/server.py [--port 8765] [--no-db] [--fast]
+                                                    [--no-captures] [--capture-interval 10]
 
 Endpoints (local only; the dashboard proxies them as /api/feeds/...):
     GET  /feeds                              feeds, state, latest reading, MongoDB status
@@ -19,7 +21,7 @@ Endpoints (local only; the dashboard proxies them as /api/feeds/...):
     GET  /feeds/<id>/setup                   ROIs, reference height, marker mode, references
     PUT  /feeds/<id>/setup                   {flood_roi?, marker_roi?, ref_height_m?}
     POST /feeds/<id>/actions                 {action: capture_reference | virtual_marker |
-                                              virtual_unlock | save | restart}
+                                              virtual_unlock | save | restart | pause | resume}
 """
 
 from __future__ import annotations
@@ -40,12 +42,27 @@ OPENCV_DIR = os.path.join(PROJECT_DIR, "OpenCV-FloodMonitoring-main")
 sys.path.insert(0, OPENCV_DIR)
 sys.path.insert(0, SERVICE_DIR)
 
+from metrics_capture import CAPTURE_INTERVAL_S, MetricsRecorder  # noqa: E402
 from mongo_sink import MongoSink  # noqa: E402
 from worker import ACTIONS, FeedConfig, FeedWorker, SetupValidationError, validate_setup_patch  # noqa: E402
 
 LOG = logging.getLogger("feed-service")
 MAX_BODY_BYTES = 1_000_000
 ROUTE = re.compile(r"^/feeds(?:/(?P<id>[A-Za-z0-9_-]+)(?:/(?P<sub>[A-Za-z0-9_.-]+))?)?/?$")
+
+
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """HTTPServer sets SO_REUSEADDR, which on Windows lets a second copy of the service
+    bind the same port while the first is still running (requests then reach the old one).
+    Take the port exclusively instead, so a duplicate fails to start."""
+
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        import socket
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def load_feeds(path: str) -> list[FeedConfig]:
@@ -75,12 +92,16 @@ def load_feeds(path: str) -> list[FeedConfig]:
 
 
 class FeedService:
-    def __init__(self, workers: dict[str, FeedWorker], sink: MongoSink | None):
+    def __init__(self, workers: dict[str, FeedWorker], sink: MongoSink | None,
+                 recorder: MetricsRecorder | None = None):
         self.workers = workers
         self.sink = sink
+        self.recorder = recorder
 
     def db_status(self) -> dict:
-        return self.sink.describe() if self.sink is not None else {"status": "disabled"}
+        status = self.sink.describe() if self.sink is not None else {"status": "disabled"}
+        status["metrics"] = self.recorder.describe() if self.recorder is not None else {"status": "disabled"}
+        return status
 
 
 def make_handler(service: FeedService):
@@ -223,6 +244,13 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=int(os.environ.get("FEED_SERVICE_PORT") or 8765))
     ap.add_argument("--no-db", action="store_true", help="do not write to MongoDB")
     ap.add_argument("--fast", action="store_true", help="process the videos as fast as possible (testing)")
+    ap.add_argument("--no-captures", action="store_true",
+                    help="do not save measurement captures (snapshot + metrics)")
+    ap.add_argument("--capture-interval", type=float, default=CAPTURE_INTERVAL_S,
+                    help=f"seconds of video between periodic captures (default {CAPTURE_INTERVAL_S:g}); "
+                         "events are always captured")
+    ap.add_argument("--captures-dir", default=os.path.join(SERVICE_DIR, "captures"),
+                    help="where the capture snapshots, JSON files and summary.csv are saved")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, stream=sys.stderr,
@@ -243,11 +271,29 @@ def main(argv=None):
                          os.environ.get("MONGODB_READINGS_COLLECTION") or "flood_readings",
                          feeds=feeds)
         sink.start()
-    workers = {f.id: FeedWorker(f, sink, realtime=not args.fast) for f in feeds}
+    recorder = None
+    if not args.no_captures:
+        recorder = MetricsRecorder(os.path.abspath(args.captures_dir), PROJECT_DIR,
+                                   uri=None if args.no_db else os.environ.get("MONGODB_URI"),
+                                   db_name=os.environ.get("MONGODB_DB") or "floodsight",
+                                   collection=os.environ.get("MONGODB_METRICS_COLLECTION") or "camera_metrics")
+        recorder.start()
+        LOG.info("Measurement captures: on events and every %g s -> %s", args.capture_interval,
+                 os.path.relpath(recorder.captures_dir, PROJECT_DIR))
+    workers = {f.id: FeedWorker(f, sink, realtime=not args.fast, recorder=recorder,
+                                capture_interval_s=args.capture_interval) for f in feeds}
+
+    # bind before the feeds start, so a second copy of the service fails right away
+    try:
+        httpd = ExclusiveHTTPServer((args.host, args.port), make_handler(FeedService(workers, sink, recorder)))
+    except OSError as e:
+        LOG.error("Cannot use port %d (%s). Another feed service is probably still running - "
+                  "stop it first (Ctrl+C in its terminal, or Task Manager > python.exe).", args.port, e)
+        if recorder is not None:
+            recorder.stop()
+        sys.exit(1)
     for w in workers.values():
         w.start()
-
-    httpd = ThreadingHTTPServer((args.host, args.port), make_handler(FeedService(workers, sink)))
     httpd.daemon_threads = True
     httpd.stopping = False
     LOG.info("Feed service on http://%s:%d/feeds (%s)", args.host, args.port,
@@ -266,6 +312,9 @@ def main(argv=None):
             w.stop()
         if sink is not None:
             sink.stop()
+        if recorder is not None:
+            recorder.stop()
+            recorder.join(timeout=5.0)                 # finish the captures still queued
         httpd.server_close()
 
 

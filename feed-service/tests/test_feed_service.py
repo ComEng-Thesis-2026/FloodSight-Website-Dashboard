@@ -7,6 +7,7 @@ A short synthetic flood clip from floodmon.synthetic is rendered once;
 no MongoDB connection is needed.
 """
 
+import csv
 import json
 import os
 import shutil
@@ -23,6 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(SERVICE_DIR), "OpenCV-FloodMonit
 sys.path.insert(0, SERVICE_DIR)
 
 from floodmon.synthetic import preset, write_scene  # noqa: E402
+from metrics_capture import (SUMMARY_HEADER, CaptureJob, CaptureScheduler,  # noqa: E402
+                             MetricsRecorder, accuracy_metrics, compute_accuracy)
 from mongo_sink import (EventTracker, build_camera_update, build_reading_doc,  # noqa: E402
                         camera_doc_id, map_status)
 from worker import FeedConfig, FeedWorker, SetupValidationError, validate_setup_patch  # noqa: E402
@@ -220,6 +223,35 @@ class TestWorker(unittest.TestCase):
         res = worker.submit("capture_reference")
         self.assertIn("message", res)
 
+    def test_pause_resume(self):
+        worker, sink = self._start(make_feed(self.tmp))
+        self.assertTrue(wait_for(lambda: worker.state == "running"))
+        self.assertTrue(worker.submit("pause")["ok"])
+        self.assertTrue(wait_for(lambda: worker.setup()["paused"] and worker.reading()["paused"]))
+        n = len(sink.payloads)
+        self.assertTrue(wait_for(lambda: len(sink.payloads) > n + 3))     # still measuring
+        frozen = [p for p, _ in sink.payloads[n:]]
+        self.assertEqual(len({p["video_t_s"] for p in frozen}), 1)        # clip position frozen
+        # stay paused longer than floodmon's frozen-video limit (--frozen-s 2): the feed must not
+        # crash or flag the paused clip as a frozen camera
+        time.sleep(3.0)
+        self.assertEqual(worker.state, "running", worker.message)
+        problem = (worker.reading().get("image_quality") or {}).get("problem") or ""
+        self.assertNotIn("frozen", problem)
+        # restart while paused: steps to the first frame, stays paused
+        self.assertTrue(worker.submit("restart")["ok"])
+        self.assertTrue(wait_for(lambda: worker.reading()["video_t_s"] < 0.2 and worker.setup()["paused"]))
+        # the dry reference capture completes on the frozen frame
+        res = worker.submit("capture_reference")
+        if not res["ok"] and res.get("needs_confirm"):
+            res = worker.submit("capture_reference")
+        self.assertTrue(res["ok"], res)
+        self.assertTrue(wait_for(lambda: not worker.setup()["capturing"]))
+        self.assertTrue(worker.submit("resume")["ok"])
+        self.assertTrue(wait_for(lambda: not worker.setup()["paused"]))
+        t0 = worker.reading()["video_t_s"]
+        self.assertTrue(wait_for(lambda: worker.reading()["video_t_s"] != t0))  # playing again
+
     def test_uncalibrated_and_missing_video(self):
         worker, _ = self._start(make_feed(self.tmp, calibrated=False))
         self.assertTrue(wait_for(lambda: worker.setup() is not None))
@@ -231,6 +263,110 @@ class TestWorker(unittest.TestCase):
         self.assertIn("missing_video", sink.states)
         self.assertTrue(missing.latest_jpeg(True))                  # placeholder frame
         self.assertFalse(missing.submit("save")["ok"])
+
+
+class FakeCollection:
+    def __init__(self):
+        self.docs = {}
+
+    def insert_one(self, doc):
+        doc["_id"] = len(self.docs) + 1
+        self.docs[doc["_id"]] = json.loads(json.dumps(doc, default=str))
+        return SimpleNamespace(inserted_id=doc["_id"])
+
+    def update_one(self, flt, update):
+        doc = self.docs[flt["_id"]]
+        for key, value in update["$set"].items():
+            parent, _, leaf = key.rpartition(".")
+            (doc[parent] if parent else doc)[leaf] = value
+
+
+class TestMetricsCapture(unittest.TestCase):
+    feed = SimpleNamespace(id="kauswagan", location="Kauswagan Highway")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="feed-test-captures-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_accuracy_follows_camera_test(self):
+        self.assertEqual(compute_accuracy(0.4, None), 1.0)
+        self.assertAlmostEqual(compute_accuracy(0.4, 0.5), 0.9)
+        self.assertEqual(compute_accuracy(0.0, 2.0), 0.0)
+        m = accuracy_metrics({"flood_coverage_pct": 60.0, "water_level_m": 0.3}, {"ref_height_m": 1.0})
+        self.assertEqual(m["pixel_detection_accuracy"], 1.0)        # self-referenced, as in cameraTest.py
+        self.assertAlmostEqual(m["classification_accuracy"], 0.7)  # 1 - |0.3/1.0 - 0.6|
+        m = accuracy_metrics({"flood_coverage_pct": 60.0, "water_level_m": 0.3}, {"ref_height_m": 1.0}, 0.5)
+        self.assertAlmostEqual(m["pixel_detection_accuracy"], 0.9)
+        none = accuracy_metrics({}, {"ref_height_m": 1.0})
+        self.assertIsNone(none["pixel_detection_accuracy"])
+        self.assertIsNone(none["classification_accuracy"])
+
+    def test_scheduler(self):
+        s = CaptureScheduler(10.0)
+        cal = {"calibrated": True}
+        self.assertIsNone(s.check({"status": "SAFE", "water_level_m": 0.0}, {"calibrated": False}, 0.0))
+        self.assertEqual(s.check({"status": "SAFE", "water_level_m": 0.0}, cal, 0.5), ("interval", None))
+        self.assertIsNone(s.check({"status": "SAFE", "water_level_m": 0.0}, cal, 5.0))
+        self.assertEqual(s.check({"status": "ALERT", "water_level_m": 0.31}, cal, 6.0),
+                         ("event", "STATUS CHANGED"))
+        self.assertIsNone(s.check({"status": "ALERT", "water_level_m": 0.32}, cal, 15.9))
+        self.assertEqual(s.check({"status": "ALERT", "water_level_m": 0.32}, cal, 16.0), ("interval", None))
+        self.assertIsNone(s.check({"status": "ALERT", "water_level_m": None}, cal, 40.0))
+
+    def test_recorder_writes_metrics_not_images(self):
+        rec = MetricsRecorder(self.tmp, self.tmp, uri="mongodb://unused", db_name="CCTVs", collection="camera_metrics")
+        rec._collection = coll = FakeCollection()
+        job = CaptureJob(feed=self.feed, payload={"status": "DANGER", "water_level_m": 0.55, "flood_coverage_pct": 80.0,
+                                                  "image_quality": {"score": 0.8, "mode": "GOOD", "lighting": "day"}},
+                         setup={"calibrated": True, "ref_height_m": 1.0, "frame_size": [960, 540]},
+                         trigger="event", event="STATUS CHANGED", clean_jpeg=b"\xff\xd8clean",
+                         processed_jpeg=b"\xff\xd8overlay",
+                         latency={"tcapture_ms": 3.0, "tprocessing_ms": 20.0, "thsv_classification_ms": 15.0,
+                                  "tkalman_ms": 0.2, "tsnapshot_ms": 4.0},
+                         t_frame_ready=time.perf_counter())
+        record = rec.record(job)
+        doc = next(iter(coll.docs.values()))
+        self.assertEqual(doc["camera_id"], "feed-kauswagan")
+        self.assertEqual(doc["status"], "DANGER")
+        self.assertEqual(doc["water_level_m"], 0.55)
+        self.assertAlmostEqual(doc["classification_accuracy"], 0.75)
+        self.assertIsNotNone(doc["latency"]["tdb_write_ms"])        # completed after the insert
+        self.assertGreaterEqual(doc["latency"]["Tresponse_ms"], 3.0)
+        self.assertFalse(any(isinstance(v, (bytes, bytearray)) for v in doc.values()))
+        self.assertNotIn("clean", json.dumps(doc))                  # no image data in the database
+        out = os.path.join(self.tmp, "kauswagan")
+        name = doc["capture_id"]
+        for suffix in (".jpg", "_processed.jpg", ".json"):
+            self.assertTrue(os.path.isfile(os.path.join(out, name + suffix)), suffix)
+        self.assertEqual(doc["snapshot"]["file"], f"kauswagan/{name}.jpg")
+        self.assertTrue(record["db_written"])
+        with open(os.path.join(out, "summary.csv"), encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        self.assertEqual(rows[0], SUMMARY_HEADER)
+        self.assertEqual(len(rows), 2)
+
+    def test_worker_captures_events_and_intervals(self):
+        rec = MetricsRecorder(os.path.join(self.tmp, "captures"), self.tmp)     # no MongoDB: local only
+        rec.start()
+        self.addCleanup(rec.stop)
+        worker = FeedWorker(make_feed(self.tmp), FakeSink(), realtime=False, recorder=rec, capture_interval_s=5.0)
+        worker.start()
+        self.addCleanup(worker.join, 5)
+        self.addCleanup(worker.stop)
+        self.assertTrue(wait_for(lambda: worker.loop_index >= 1), "the clip never looped")
+        self.assertTrue(wait_for(lambda: rec.captures >= 8))
+        with open(os.path.join(self.tmp, "captures", "test", "summary.csv"), encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        triggers = {r["trigger"] for r in rows}
+        self.assertEqual(triggers, {"event", "interval"})
+        self.assertTrue({"ALERT", "DANGER"} <= {r["status"] for r in rows if r["event"] == "STATUS CHANGED"})
+        for r in rows:
+            self.assertGreater(float(r["tprocessing_ms"]), 0.0)
+            self.assertGreater(float(r["thsv_classification_ms"]), 0.0)     # timed, not estimated
+            self.assertLessEqual(float(r["thsv_classification_ms"]), float(r["tprocessing_ms"]))
+            self.assertGreaterEqual(float(r["Tresponse_ms"]), float(r["tprocessing_ms"]))
+            self.assertEqual(r["db_written"], "False")
+            self.assertTrue(os.path.isfile(os.path.join(self.tmp, r["snapshot_file"])))
 
 
 class TestHttp(unittest.TestCase):

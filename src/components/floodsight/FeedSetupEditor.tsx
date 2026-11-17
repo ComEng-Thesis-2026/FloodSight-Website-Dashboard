@@ -3,6 +3,8 @@ import {
   Camera as CameraIcon,
   Lock,
   Minus,
+  Pause,
+  Play,
   Plus,
   RotateCcw,
   Save,
@@ -20,7 +22,14 @@ import type { FeedSetup } from "@/lib/floodsight/types";
 import { cn } from "@/lib/utils";
 
 type Point = [number, number];
-type FeedAction = "capture_reference" | "virtual_marker" | "virtual_unlock" | "save" | "restart";
+type FeedAction =
+  | "capture_reference"
+  | "virtual_marker"
+  | "virtual_unlock"
+  | "save"
+  | "restart"
+  | "pause"
+  | "resume";
 type DragTarget = { region: "flood" | "marker"; index: number } | null;
 
 interface ActionResult {
@@ -77,6 +86,7 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
   const [frameW, frameH] = setup?.frame_size ?? [960, 540];
   const handleR = Math.max(frameW, frameH) / 110;
   const locked = Boolean(setup?.marker_locked);
+  const paused = Boolean(setup?.paused);
 
   function framePoint(clientX: number, clientY: number): Point {
     const rect = svgRef.current!.getBoundingClientRect();
@@ -203,6 +213,7 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
                 Dry ref: {setup.references.length ? setup.references.join(", ") : "none"}
               </Chip>
               {setup.capturing ? <Chip tone="warn">Capturing reference…</Chip> : null}
+              {paused ? <Chip tone="warn">Paused</Chip> : null}
             </>
           ) : null}
         </div>
@@ -291,8 +302,8 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
         <p className="text-xs text-muted-foreground">
           Drag the <span className="font-semibold text-roi-flood">flood ROI</span> (road area) and
           the <span className="font-semibold text-roi-marker">marker ROI</span> (bottom edge = road,
-          0 m; top edge = reference height), then apply. During the dry scene, capture the dry
-          reference.
+          0 m; top edge = reference height), then apply. Restart the video, pause it on the dry
+          scene, then capture the dry reference.
         </p>
 
         <div className="flex flex-wrap items-end gap-3">
@@ -356,23 +367,41 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
         <div className="grid gap-2 sm:grid-cols-2">
           <Button
             type="button"
-            variant="secondary"
-            onClick={() => runAction("capture_reference", "Capture dry reference")}
+            variant={paused ? "default" : "secondary"}
+            onClick={() =>
+              paused ? runAction("resume", "Play video") : runAction("pause", "Pause video")
+            }
             disabled={!running || busy !== null}
-            title="Like 'b': the road must be dry and still; press again within 5 s to capture anyway"
+            aria-pressed={paused}
+            title={
+              paused
+                ? "Continue playing the clip"
+                : "Like 'p': freeze the clip on the current frame (it is still measured)"
+            }
           >
-            <CameraIcon className="h-4 w-4" />
-            Capture dry reference
+            {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+            {paused ? "Play video" : "Pause video"}
           </Button>
           <Button
             type="button"
             variant="secondary"
             onClick={() => runAction("restart", "Restart video")}
             disabled={!running || busy !== null}
-            title="Jump back to the dry scene at the start of the clip"
+            title="Jump back to the dry scene at the start of the clip (stays paused if paused)"
           >
             <SkipBack className="h-4 w-4" />
             Restart video
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="sm:col-span-2"
+            onClick={() => runAction("capture_reference", "Capture dry reference")}
+            disabled={!running || busy !== null}
+            title="Like 'b': the road must be dry and still; press again within 5 s to capture anyway"
+          >
+            <CameraIcon className="h-4 w-4" />
+            Capture dry reference
           </Button>
           <Button
             type="button"

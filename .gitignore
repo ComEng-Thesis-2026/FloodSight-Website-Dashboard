@@ -37,6 +37,8 @@ __pycache__/
 # OpenCV feed service: the CDRRMO clips are large and stay local
 feed-service/videos/*
 !feed-service/videos/README.md
+# measurement captures (snapshots + metrics) grow while the service runs
+feed-service/captures/
 
 # Personal notes and paper drafts stay local
 PROMPTS/

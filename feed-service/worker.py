@@ -29,10 +29,11 @@ from floodmon.modes import ReferenceGuard
 from floodmon.pipeline import Monitor
 from floodmon.quality import SMALL, classify_lighting, enhance_for_display
 from floodmon.ui import MARKER_COLOR, draw_overlay
+from metrics_capture import CAPTURE_INTERVAL_S, CaptureJob, CaptureScheduler
 
 LOG = logging.getLogger("feed-service")
 
-ACTIONS = ("capture_reference", "virtual_marker", "virtual_unlock", "save", "restart")
+ACTIONS = ("capture_reference", "virtual_marker", "virtual_unlock", "save", "restart", "pause", "resume")
 COMMAND_TIMEOUT_S = 3.0
 MISSING_VIDEO_RETRY_S = 10.0
 
@@ -133,6 +134,10 @@ class LoopingClip:
     Time keeps increasing across loops (the Kalman filter needs a monotonic clock).
     When processing falls behind the clip's own clock, frames are skipped with
     grab() so the feed stays real-time instead of slowing down.
+
+    Pausing freezes the clip position but not the clock: held_t keeps running so the
+    worker can keep measuring the frozen frame (e.g. to capture a dry reference from
+    it), and on resume the clip continues from where it stopped without skipping ahead.
     """
 
     def __init__(self, path: str, realtime: bool = True):
@@ -150,11 +155,23 @@ class LoopingClip:
         self.skipped = 0
         self._wall0 = None
         self.wrapped = False            # set when the last read started a new loop
+        self.last_read_ms = 0.0         # decode time of the last delivered frame (no pacing sleep)
+        self.paused = False
+        self._paused_at = None          # wall clock of the pause (or of the last step while paused)
+        self._t_offset = 0.0            # time spent paused, added to the clip clock
+        self._last_t = 0.0              # t of the last delivered frame
 
     @property
     def video_t_s(self) -> float:
         """Position inside the current loop of the clip."""
         return (self.index - self.loop_start_index) / self.fps
+
+    @property
+    def held_t(self) -> float:
+        """Clock for re-measuring the last frame while paused (keeps increasing)."""
+        if not self.paused:
+            return self._last_t
+        return self._last_t + (time.monotonic() - self._paused_at)
 
     def _seek_start(self):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -163,10 +180,25 @@ class LoopingClip:
     def restart(self):
         self._seek_start()
 
+    def pause(self):
+        if not self.paused:
+            self.paused = True
+            self._paused_at = time.monotonic()
+
+    def resume(self):
+        if not self.paused:
+            return
+        t = self.held_t
+        self.paused, self._paused_at = False, None
+        # continue just after the held clock, and pace from now on (no catch-up skipping)
+        self._t_offset = t + 1.0 / self.fps - self.index / self.fps
+        self._wall0 = time.monotonic() - self.index / self.fps
+
     def read(self):
-        """Return (frame, t) or (None, t) if the file cannot be read at all."""
+        """Return (frame, t) or (None, t) if the file cannot be read at all.
+        While paused this is a single step (e.g. after restart): no pacing, no skipping."""
         self.wrapped = False
-        if self.realtime:
+        if self.realtime and not self.paused:
             if self._wall0 is None:
                 self._wall0 = time.monotonic() - self.index / self.fps
             behind = int((time.monotonic() - self._wall0) * self.fps) - self.index
@@ -175,17 +207,27 @@ class LoopingClip:
                     break
                 self.index += 1
                 self.skipped += 1
+        t_read = time.perf_counter()
         ok, frame = self.cap.read()
         if not ok:
             self._seek_start()
             self.wrapped = True
             ok, frame = self.cap.read()
             if not ok:
-                return None, self.index / self.fps
-        t = self.index / self.fps
+                return None, self.index / self.fps + self._t_offset
+        self.last_read_ms = (time.perf_counter() - t_read) * 1000.0
+        pos = self.index / self.fps
+        if self.paused:                     # stepping while paused: keep the held clock monotonic
+            now = time.monotonic()
+            t = self.held_t
+            self._paused_at = now
+            self._t_offset = t - pos
+        else:
+            t = pos + self._t_offset
+        self._last_t = t
         self.index += 1
-        if self.realtime:
-            delay = self._wall0 + t - time.monotonic()
+        if self.realtime and not self.paused:
+            delay = self._wall0 + pos - time.monotonic()
             if delay > 0:
                 time.sleep(delay)
         return frame, t
@@ -206,11 +248,37 @@ def placeholder_jpeg(text: str, sub: str = "", size=(960, 540), quality: int = 7
     return buf.tobytes() if ok else b""
 
 
+def install_stage_timers(mon, stage: dict):
+    """Time water detection and the Kalman step inside Monitor.process without changing floodmon:
+    this feed's own detector and filter instances get timing wrappers (Monitor calls them as
+    self.det.process(...) and self.kalman.step(...), and never replaces either object)."""
+    det_process, kalman_step = mon.det.process, mon.kalman.step
+
+    def timed_process(*a, **kw):
+        t0 = time.perf_counter()
+        try:
+            return det_process(*a, **kw)
+        finally:
+            stage["thsv_classification_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    def timed_step(*a, **kw):
+        t0 = time.perf_counter()
+        try:
+            return kalman_step(*a, **kw)
+        finally:
+            stage["tkalman_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    mon.det.process, mon.kalman.step = timed_process, timed_step
+
+
 class FeedWorker(threading.Thread):
-    def __init__(self, cfg: FeedConfig, sink=None, realtime: bool = True):
+    def __init__(self, cfg: FeedConfig, sink=None, realtime: bool = True, recorder=None,
+                 capture_interval_s: float = CAPTURE_INTERVAL_S):
         super().__init__(daemon=True, name=f"feed-{cfg.id}")
         self.cfg = cfg
         self.sink = sink
+        self.recorder = recorder         # MetricsRecorder: snapshot + metrics captures (None = off)
+        self.capture_interval_s = capture_interval_s
         self.realtime = realtime
         self.state = "starting"          # starting | running | missing_video | error | stopped
         self.message: str | None = None
@@ -352,6 +420,8 @@ class FeedWorker(threading.Thread):
                 cal.save(cfg.config_path)
 
             mon = Monitor(args, cal, frame.shape, source_kind="file", start_time=None, save_setup=save_setup)
+            stage: dict = {}
+            install_stage_timers(mon, stage)
             det = mon.det
             for name in dict.fromkeys(list((cal.reference_images or {}).values())
                                       + ([cal.reference_image] if cal.reference_image else [])):
@@ -381,7 +451,8 @@ class FeedWorker(threading.Thread):
 
             ctx = dict(args=args, cal=cal, mon=mon, clip=clip, save_setup=save_setup, W=W, H=H,
                        guard=ReferenceGuard(wet_coverage=args.wet_coverage, wet_level=args.wet_level),
-                       view_frame=frame, meas=None, q=det.quality, t=t)
+                       view_frame=frame, meas=None, q=det.quality, t=t, stage=stage,
+                       captures=CaptureScheduler(self.capture_interval_s))
             self._ctx = ctx
             self._set_state("running", None)
             LOG.info("[%s] playing %s (%dx%d, %.1f fps, %s)", cfg.id, os.path.basename(cfg.video), W, H,
@@ -398,17 +469,33 @@ class FeedWorker(threading.Thread):
         fps, t_fps, n_fps = 0.0, time.monotonic(), 0
         last_pub = 0.0
         pub_interval = 1.0 / max(cfg.stream_fps, 1.0)
+        stage = ctx["stage"]
+        capture_ms = clip.last_read_ms
+        held = frame                                    # last clip frame, re-measured while paused
         while not self._stop_event.is_set():
             self._apply_commands(ctx)
-            if frame is None:
+            if frame is None and clip.paused and not ctx.pop("step", False):
+                # paused: keep measuring the frozen frame at the clip's frame rate, so a dry
+                # reference capture (which averages several frames) completes on it
+                self._stop_event.wait(1.0 / clip.fps)
+                frame, t, capture_ms = held, clip.held_t, 0.0
+            elif frame is None:
                 frame, t = clip.read()
                 if frame is None:
                     raise RuntimeError("the video stopped delivering frames")
                 if clip.wrapped:
                     self._new_loop(ctx)
+                t_resize = time.perf_counter()
                 frame = self._resize(frame)
                 if frame.shape[:2] != (H, W):
                     frame = cv2.resize(frame, (W, H), interpolation=cv2.INTER_AREA)
+                capture_ms = clip.last_read_ms + (time.perf_counter() - t_resize) * 1000.0
+                held = frame
+            if clip.paused:
+                # a deliberately paused clip is not a frozen camera: without this, floodmon flags
+                # FROZEN after --frozen-s, marks the data unreliable and blocks a dry reference capture
+                mon.det.qm.frozen_since = None
+            stage["thsv_classification_ms"] = stage["tkalman_ms"] = 0.0
             t0 = time.perf_counter()
             r = mon.process(frame, t, measuring=True)
             processing_ms = (time.perf_counter() - t0) * 1000.0
@@ -425,15 +512,34 @@ class FeedWorker(threading.Thread):
                 "feed_id": cfg.id,
                 "loop_index": self.loop_index,
                 "video_t_s": round(clip.video_t_s, 2),
+                "paused": clip.paused,
                 "processing_ms": round(processing_ms, 1),
                 "frames_skipped": clip.skipped,
             })
             setup = self._setup_snapshot(ctx)
             now = time.monotonic()
-            jpegs = None
+            jpegs, encode_ms = None, 0.0
             if now - last_pub >= pub_interval:
                 last_pub = now
+                t_enc = time.perf_counter()
                 jpegs = self._encode(frame, r, ctx, fps)
+                encode_ms = (time.perf_counter() - t_enc) * 1000.0
+            if self.recorder is not None and not clip.paused:   # a frozen frame is not a new sample
+                due = ctx["captures"].check(payload, setup, t)
+                if due is not None:
+                    if jpegs is None:                       # this exact frame must be the snapshot
+                        t_enc = time.perf_counter()
+                        jpegs = self._encode(frame, r, ctx, fps)
+                        encode_ms = (time.perf_counter() - t_enc) * 1000.0
+                    self.recorder.submit(CaptureJob(
+                        feed=cfg, payload=dict(payload), setup=setup, trigger=due[0], event=due[1],
+                        clean_jpeg=jpegs[False], processed_jpeg=jpegs[True],
+                        latency={"tcapture_ms": round(capture_ms, 3),
+                                 "tprocessing_ms": round(processing_ms, 3),
+                                 "thsv_classification_ms": round(stage["thsv_classification_ms"], 3),
+                                 "tkalman_ms": round(stage["tkalman_ms"], 3),
+                                 "tsnapshot_ms": round(encode_ms, 3)},
+                        t_frame_ready=t0))
             with self._cond:
                 self._payload, self._setup = payload, setup
                 if jpegs is not None:
@@ -459,7 +565,9 @@ class FeedWorker(threading.Thread):
         # enhance_for_display may hand back the very same array (and r.frame can be the raw
         # frame), so draw on a copy or the clean view and the next measurement get the overlay
         base = enhance_for_display(r.frame, r.quality).copy()
-        annotated = draw_overlay(base, mon.det, cal, r.res, r.meas, r.status, fps, hint, True,
+        # hard failures (no signal, frozen video) give a measurement without masks: no water tint
+        show_water = r.meas is None or getattr(r.meas, "water_mask", None) is not None
+        annotated = draw_overlay(base, mon.det, cal, r.res, r.meas, r.status, fps, hint, show_water,
                                  show_handles=False,
                                  extra_lines=[(f"MARKER: {cal.marker_mode.upper()}", MARKER_COLOR)])
         ok, buf = cv2.imencode(".jpg", annotated, params)
@@ -481,6 +589,7 @@ class FeedWorker(threading.Thread):
             "calibrated": bool(cal.ready and not cal.is_default),
             "capturing": mon.det.capture is not None,
             "conversion_hint": mon.vmark.status_text(),
+            "paused": ctx["clip"].paused,
         }
 
     def _new_loop(self, ctx):
@@ -541,5 +650,15 @@ class FeedWorker(threading.Thread):
         if kind == "restart":
             clip.restart()
             self._new_loop(ctx)
+            if clip.paused:
+                ctx["step"] = True                   # show the first (dry) frame, stay paused
+                return {"ok": True, "message": "Video restarted - paused on the first frame (dry scene)."}
             return {"ok": True, "message": "Video restarted from the beginning (dry scene)."}
+        if kind == "pause":
+            clip.pause()
+            return {"ok": True, "message": "Video paused - the frozen frame is still measured, "
+                                           "so you can capture the dry reference from it."}
+        if kind == "resume":
+            clip.resume()
+            return {"ok": True, "message": "Video playing."}
         return {"ok": False, "message": f"Unknown action: {kind}"}
