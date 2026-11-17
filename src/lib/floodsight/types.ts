@@ -111,6 +111,7 @@ export interface FeedPayload {
   confidence?: number;
   fps?: number;
   video_t_s?: number;
+  paused?: boolean;
   loop_index?: number;
   processing_ms?: number;
   image_quality?: FeedImageQuality & { problem?: string | null };
@@ -128,6 +129,8 @@ export interface FeedSetup {
   calibrated: boolean;
   capturing: boolean;
   conversion_hint: string | null;
+  /** The clip is frozen on one frame (still measured, so a dry reference can be captured). */
+  paused?: boolean;
 }
 
 export interface FeedReadingResponse {

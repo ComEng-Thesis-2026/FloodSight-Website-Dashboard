@@ -6,38 +6,38 @@
   ],
   "flood_roi": [
     [
-      242,
-      282
+      197,
+      246
     ],
     [
-      764,
-      285
+      457,
+      240
     ],
     [
-      763,
-      506
+      822,
+      530
     ],
     [
-      239,
-      508
+      0,
+      521
     ]
   ],
   "marker_roi": [
     [
-      453.9,
-      503.7
+      282.2,
+      272.4
     ],
     [
-      575.3,
-      502.4
+      295.3,
+      271.9
     ],
     [
-      572.6,
-      299.2
+      294.8,
+      235.0
     ],
     [
-      461.8,
-      292.6
+      281.9,
+      234.5
     ]
   ],
   "ref_height_m": 1.0,
@@ -46,7 +46,7 @@
   "reference_images": {
     "day": "reference_dry_kauswagan_day_virtual.png"
   },
-  "marker_locked": true,
+  "marker_locked": false,
   "virtual_marker": true,
   "physical_marker_references": {
     "day": "reference_dry_kauswagan_day.png"

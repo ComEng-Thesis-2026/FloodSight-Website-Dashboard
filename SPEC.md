@@ -73,6 +73,9 @@ Build a responsive, modern dashboard that allows users to:
 - Every reading must be stored in MongoDB:
   - the camera document is updated every second
   - the `flood_readings` collection gets one document per second plus one per event, with latency fields
+- Each feed must save a measurement capture on every event and every 10 s of video:
+  - the snapshot (clean and annotated JPEG) and its data are saved locally in `feed-service/captures/<feed id>/`; the image is not stored in MongoDB
+  - the `camera_metrics` collection gets one document per capture: water level, flood status, the OpenCV metrics, pixel and classification accuracy (computed as in `cameraTest.py`) and the latency breakdown
 - On the Camera Configuration page, admins must be able to edit a feed's setup the same way as in the stand-alone OpenCV program:
   - flood ROI polygon
   - 4-corner marker ROI
