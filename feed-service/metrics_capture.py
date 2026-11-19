@@ -145,6 +145,8 @@ def build_metrics_doc(job: CaptureJob, snapshot: dict, reference_ratio: float | 
         "loop_index": p.get("loop_index"),
         "calibrated": bool((job.setup or {}).get("calibrated")),
         "marker_mode": p.get("marker_mode"),
+        "level_source": p.get("level_source"),
+        "road_condition": p.get("road_condition"),
         "water_level_m": p.get("water_level_m"),
         "raw_level_m": p.get("raw_level_m"),
         "status": map_status(p.get("status")) or p.get("status"),

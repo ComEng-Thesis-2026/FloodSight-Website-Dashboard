@@ -45,6 +45,7 @@ sys.path.insert(0, SERVICE_DIR)
 from metrics_capture import CAPTURE_INTERVAL_S, MetricsRecorder  # noqa: E402
 from mongo_sink import MongoSink  # noqa: E402
 from worker import ACTIONS, FeedConfig, FeedWorker, SetupValidationError, validate_setup_patch  # noqa: E402
+from virtual_flood_marker import FULL_DEPTH_DEFAULT_M  # noqa: E402
 
 LOG = logging.getLogger("feed-service")
 MAX_BODY_BYTES = 1_000_000
@@ -63,6 +64,15 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
         if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
+
+
+def _full_depth(item: dict) -> float:
+    """Site value: the water depth (m) at which the whole flood ROI is under water."""
+    value = item.get("flood_full_depth_m", FULL_DEPTH_DEFAULT_M)
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0.02 <= value <= 2.0:
+        raise ValueError(f"feeds.json: {item.get('id')}: flood_full_depth_m must be a number of meters "
+                         f"between 0.02 and 2 (found {value!r})")
+    return float(value)
 
 
 def load_feeds(path: str) -> list[FeedConfig]:
@@ -84,6 +94,7 @@ def load_feeds(path: str) -> list[FeedConfig]:
             max_width=int(item.get("max_width", 960)),
             stream_fps=float(item.get("stream_fps", 12.0)),
             jpeg_quality=int(item.get("jpeg_quality", 75)),
+            flood_full_depth_m=_full_depth(item),
         ))
     ids = [f.id for f in feeds]
     if len(ids) != len(set(ids)):

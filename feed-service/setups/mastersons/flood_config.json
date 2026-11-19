@@ -1,0 +1,66 @@
+{
+  "camera_id": "mastersons",
+  "frame_size": [
+    960,
+    540
+  ],
+  "flood_roi": [
+    [
+      318,
+      210
+    ],
+    [
+      473,
+      214
+    ],
+    [
+      662,
+      213
+    ],
+    [
+      960,
+      426
+    ],
+    [
+      960,
+      527
+    ],
+    [
+      48,
+      526
+    ]
+  ],
+  "marker_roi": [
+    [
+      633.5,
+      211.5
+    ],
+    [
+      639.5,
+      211.5
+    ],
+    [
+      639.5,
+      187.5
+    ],
+    [
+      633.5,
+      187.5
+    ]
+  ],
+  "ref_height_m": 1.0,
+  "marker_width_m": null,
+  "reference_image": null,
+  "reference_images": {
+    "day": "reference_dry_mastersons_day.png"
+  },
+  "marker_locked": false,
+  "virtual_marker": true,
+  "physical_marker_references": {
+    "day": "reference_dry_mastersons_day.png"
+  },
+  "lens_file": null,
+  "lens_applied": false,
+  "tag_layout": null,
+  "tag_anchors": null
+}

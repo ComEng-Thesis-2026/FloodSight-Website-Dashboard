@@ -105,6 +105,12 @@ export interface FeedPayload {
   resolution_cm_per_px?: number | null;
   flood_detected?: boolean;
   flood_coverage_pct?: number;
+  /** Feed service: DRY, WET (road changed, no flood water) or FLOODED. */
+  road_condition?: "DRY" | "WET" | "FLOODED" | null;
+  /** Feed service: "flood_roi" when the virtual marker's level comes from the flood ROI. */
+  level_source?: "flood_roi" | "marker";
+  /** Feed service: colour of the remembered physical-marker band the water reaches. */
+  marker_color?: "GREEN" | "YELLOW" | "RED";
   anomaly?: boolean;
   anomaly_reason?: string | null;
   obstruction_at_marker?: boolean;
@@ -131,6 +137,15 @@ export interface FeedSetup {
   conversion_hint: string | null;
   /** The clip is frozen on one frame (still measured, so a dry reference can be captured). */
   paused?: boolean;
+  /** The physical marker as the virtual marker remembers it (null = not remembered). */
+  marker_memory?: {
+    bands: { color: "GREEN" | "YELLOW" | "RED"; from_m: number; to_m: number }[];
+    upside_down: boolean;
+    source: string;
+    learned_at: string;
+    px_per_m: number;
+    cm_per_px: number;
+  } | null;
 }
 
 export interface FeedReadingResponse {

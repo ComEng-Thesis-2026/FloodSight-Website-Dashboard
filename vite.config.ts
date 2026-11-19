@@ -12,4 +12,24 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      watch: {
+        // Python / OpenCV output that is never part of the website. The feed service writes
+        // capture snapshots every few seconds into folders with thousands of files; watching
+        // them kept the dev server's event loop busy and /api/feeds answered in 6-13 s.
+        ignored: [
+          "**/.venv/**",
+          "**/.venv-1/**",
+          "**/__pycache__/**",
+          "**/feed-service/captures/**",
+          "**/feed-service/setups/**",
+          "**/feed-service/videos/**",
+          "**/camera_evaluation_outputs/**",
+          "**/paper_results/**",
+          "**/OpenCV-FloodMonitoring-main/**",
+        ],
+      },
+    },
+  },
 });

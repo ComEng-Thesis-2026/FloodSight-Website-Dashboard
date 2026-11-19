@@ -3,6 +3,7 @@ import {
   Camera as CameraIcon,
   Lock,
   Minus,
+  Palette,
   Pause,
   Play,
   Plus,
@@ -26,6 +27,7 @@ type FeedAction =
   | "capture_reference"
   | "virtual_marker"
   | "virtual_unlock"
+  | "remember_marker"
   | "save"
   | "restart"
   | "pause"
@@ -45,6 +47,28 @@ const MODE_LABEL: Record<FeedSetup["marker_mode"], string> = {
   converting: "Converting - marker locked",
   virtual: "Virtual marker",
 };
+
+const BAND_DOT: Record<string, string> = {
+  GREEN: "bg-green-500",
+  YELLOW: "bg-yellow-400",
+  RED: "bg-red-500",
+};
+
+/** The physical marker's colour bands as the virtual marker remembers them (bottom to top). */
+function RememberedBands({ memory }: { memory: NonNullable<FeedSetup["marker_memory"]> }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      Remembered:
+      {memory.bands.map((b) => (
+        <span key={`${b.color}${b.from_m}`} className="inline-flex items-center gap-1">
+          <span className={cn("h-2 w-2 rounded-full", BAND_DOT[b.color] ?? "bg-muted")} />
+          {b.from_m.toFixed(2)}–{b.to_m.toFixed(2)} m
+        </span>
+      ))}
+      {memory.upside_down ? <span>(flipped)</span> : null}
+    </span>
+  );
+}
 
 function clonePoints(points: Point[] | undefined): Point[] {
   return (points ?? []).map(([x, y]) => [x, y]);
@@ -212,6 +236,13 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
               <Chip tone={setup.references.length ? "ok" : "warn"}>
                 Dry ref: {setup.references.length ? setup.references.join(", ") : "none"}
               </Chip>
+              {setup.marker_memory ? (
+                <Chip tone="ok">
+                  <RememberedBands memory={setup.marker_memory} />
+                </Chip>
+              ) : locked ? (
+                <Chip tone="warn">Marker colours not remembered</Chip>
+              ) : null}
               {setup.capturing ? <Chip tone="warn">Capturing reference…</Chip> : null}
               {paused ? <Chip tone="warn">Paused</Chip> : null}
             </>
@@ -422,6 +453,17 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
           >
             <Unlock className="h-4 w-4" />
             Unlock marker
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="sm:col-span-2"
+            onClick={() => runAction("remember_marker", "Remember physical marker")}
+            disabled={!running || busy !== null}
+            title="While the physical marker is in view (pause on the dry scene): remember its green / yellow / red bands for the virtual marker. Locking does this too."
+          >
+            <Palette className="h-4 w-4" />
+            Remember physical marker
           </Button>
         </div>
         <Button
