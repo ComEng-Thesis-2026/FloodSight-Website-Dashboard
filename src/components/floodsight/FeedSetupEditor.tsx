@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Camera as CameraIcon,
+  ImageDown,
   Lock,
   Minus,
+  Palette,
   Pause,
   Play,
   Plus,
@@ -26,6 +28,7 @@ type FeedAction =
   | "capture_reference"
   | "virtual_marker"
   | "virtual_unlock"
+  | "remember_marker"
   | "save"
   | "restart"
   | "pause"
@@ -41,10 +44,32 @@ interface ActionResult {
 }
 
 const MODE_LABEL: Record<FeedSetup["marker_mode"], string> = {
-  physical: "Physical marker",
-  converting: "Converting - marker locked",
-  virtual: "Virtual marker",
+  physical: "Physical Marker",
+  converting: "Converting - Marker Locked",
+  virtual: "Virtual Marker",
 };
+
+const BAND_DOT: Record<string, string> = {
+  GREEN: "bg-green-500",
+  YELLOW: "bg-yellow-400",
+  RED: "bg-red-500",
+};
+
+/** The physical marker's colour bands as the virtual marker remembers them (bottom to top). */
+function RememberedBands({ memory }: { memory: NonNullable<FeedSetup["marker_memory"]> }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      Remembered:
+      {memory.bands.map((b) => (
+        <span key={`${b.color}${b.from_m}`} className="inline-flex items-center gap-1">
+          <span className={cn("h-2 w-2 rounded-full", BAND_DOT[b.color] ?? "bg-muted")} />
+          {b.from_m.toFixed(2)}–{b.to_m.toFixed(2)} m
+        </span>
+      ))}
+      {memory.upside_down ? <span>(flipped)</span> : null}
+    </span>
+  );
+}
 
 function clonePoints(points: Point[] | undefined): Point[] {
   return (points ?? []).map(([x, y]) => [x, y]);
@@ -191,35 +216,49 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
   }
 
   const virtualLabel = !setup
-    ? "Virtual marker"
+    ? "Virtual Marker"
     : setup.marker_mode === "physical"
-      ? "Lock virtual marker (1/2)"
+      ? "Lock Virtual Marker (1/2)"
       : setup.marker_mode === "converting"
-        ? "Marker removed - convert (2/2)"
-        : "Virtual marker active";
+        ? "Marker Removed - Convert (2/2)"
+        : "Virtual Marker Active";
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-          <Chip tone={running ? "ok" : "warn"}>{data?.state ?? (error ? "offline" : "…")}</Chip>
+          <Chip tone={running ? "ok" : "warn"}>
+            {data?.state
+              ? data.state.charAt(0).toUpperCase() + data.state.slice(1)
+              : error
+                ? "Offline"
+                : "Loading"}
+          </Chip>
           {setup ? (
             <>
               <Chip tone={setup.calibrated ? "ok" : "warn"}>
-                {setup.calibrated ? "Calibrated" : "Setup needed"}
+                {setup.calibrated ? "Calibrated" : "Setup Needed"}
               </Chip>
               <Chip>{MODE_LABEL[setup.marker_mode]}</Chip>
               <Chip tone={setup.references.length ? "ok" : "warn"}>
-                Dry ref: {setup.references.length ? setup.references.join(", ") : "none"}
+                Dry Ref:{" "}
+                {setup.references.length ? setup.references.join(", ").toUpperCase() : "None"}
               </Chip>
-              {setup.capturing ? <Chip tone="warn">Capturing reference…</Chip> : null}
+              {setup.marker_memory ? (
+                <Chip tone="ok">
+                  <RememberedBands memory={setup.marker_memory} />
+                </Chip>
+              ) : locked ? (
+                <Chip tone="warn">Marker Colors Not Remembered</Chip>
+              ) : null}
+              {setup.capturing ? <Chip tone="warn">Capturing Reference…</Chip> : null}
               {paused ? <Chip tone="warn">Paused</Chip> : null}
             </>
           ) : null}
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
           <ScanEye className="h-4 w-4 text-muted-foreground" />
-          OpenCV overlay
+          OpenCV Overlay
           <Switch
             checked={overlay}
             onCheckedChange={setOverlay}
@@ -300,16 +339,16 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
 
       <div className="space-y-4 border-t border-border p-4">
         <p className="text-xs text-muted-foreground">
-          Drag the <span className="font-semibold text-roi-flood">flood ROI</span> (road area) and
-          the <span className="font-semibold text-roi-marker">marker ROI</span> (bottom edge = road,
-          0 m; top edge = reference height), then apply. Restart the video, pause it on the dry
-          scene, then capture the dry reference.
+          Drag the <span className="font-semibold text-roi-flood">Flood ROI</span> (Road Area) and
+          the <span className="font-semibold text-roi-marker">Marker ROI</span> (Bottom Edge = Road,
+          0 m; Top Edge = Reference Height), Then Apply. Restart the Video, Pause It on the Dry
+          Scene, Then Capture the Dry Reference.
         </p>
 
         <div className="flex flex-wrap items-end gap-3">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">
-              Reference height (m)
+              Reference Height (m)
             </span>
             <Input
               type="number"
@@ -380,7 +419,7 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
             }
           >
             {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-            {paused ? "Play video" : "Pause video"}
+            {paused ? "Play Video" : "Pause Video"}
           </Button>
           <Button
             type="button"
@@ -390,7 +429,7 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
             title="Jump back to the dry scene at the start of the clip (stays paused if paused)"
           >
             <SkipBack className="h-4 w-4" />
-            Restart video
+            Restart Video
           </Button>
           <Button
             type="button"
@@ -401,7 +440,18 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
             title="Like 'b': the road must be dry and still; press again within 5 s to capture anyway"
           >
             <CameraIcon className="h-4 w-4" />
-            Capture dry reference
+            Capture Dry Reference
+          </Button>
+          <Button
+            type="button"
+            variant="default"
+            className="sm:col-span-2"
+            onClick={() => runAction("save_screenshot", "Save screenshot with matrices")}
+            disabled={!running || busy !== null}
+            title="Save the clean and annotated screenshots in the project's Snapshots folder and store their matrices in MongoDB"
+          >
+            <ImageDown className="h-4 w-4" />
+            Save Screenshot With Matrices
           </Button>
           <Button
             type="button"
@@ -421,9 +471,27 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
             title="Like Shift+X: unlock the marker so it can be moved again"
           >
             <Unlock className="h-4 w-4" />
-            Unlock marker
+            Unlock Marker
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="sm:col-span-2"
+            onClick={() => runAction("remember_marker", "Remember physical marker")}
+            disabled={!running || busy !== null}
+            title="While the physical marker is in view (pause on the dry scene): remember its green / yellow / red bands for the virtual marker. Locking does this too."
+          >
+            <Palette className="h-4 w-4" />
+            Remember Physical Marker
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          The Screenshot Includes the Water Level, Timestamp, Flood ROI, Virtual Marker Level, Flood
+          Status, and OpenCV Measurement Matrices. The Clean and Annotated Images are Saved under{" "}
+          <span className="font-medium text-foreground">Snapshots/&lt;Feed Id&gt;/</span>, and Their
+          Matrix Data Is Stored in the MongoDB <span className="font-mono">camera_metrics</span>{" "}
+          collection.
+        </p>
         <Button
           type="button"
           className="w-full"
@@ -431,7 +499,7 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
           disabled={!running || busy !== null}
         >
           <Save className="h-4 w-4" />
-          Save OpenCV setup
+          Save OpenCV Setup
         </Button>
 
         {setup?.conversion_hint ? (

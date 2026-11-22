@@ -38,6 +38,8 @@ export function FeedMetrics({ data, error }: FeedMetricsProps) {
       value: fmt(reading?.water_level_m != null ? reading.water_level_m * 100 : null, 1, " cm"),
     },
     { label: "OpenCV status", value: statusLabel(reading?.status) },
+    { label: "Road condition", value: reading?.road_condition ?? "–" },
+    { label: "Marker band reached", value: reading?.marker_color ?? "–" },
     { label: "Road flood coverage", value: fmt(reading?.flood_coverage_pct, 0, " %") },
     {
       label: "Confidence",
@@ -58,7 +60,10 @@ export function FeedMetrics({ data, error }: FeedMetricsProps) {
     },
     {
       label: "Marker",
-      value: reading ? (MODE_LABEL[reading.marker_mode] ?? reading.marker_mode) : "–",
+      value: reading
+        ? (MODE_LABEL[reading.marker_mode] ?? reading.marker_mode) +
+          (reading.level_source === "flood_roi" ? " · from flood ROI" : "")
+        : "–",
     },
     {
       label: "Processing",

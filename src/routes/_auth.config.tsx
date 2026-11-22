@@ -131,7 +131,7 @@ function ConfigPage() {
     return (
       <div className="rounded-xl border border-border bg-card p-8 text-center">
         <ShieldAlert className="mx-auto h-8 w-8 text-muted-foreground" />
-        <p className="mt-2 text-sm text-muted-foreground">Admin access required.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Admin Access Required.</p>
       </div>
     );
   }
@@ -150,7 +150,7 @@ function ConfigPage() {
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Camera Configuration</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tune the Region of Interest for water-marker detection.
+          Tune the Region of Interest for Water-Marker Detection.
         </p>
       </header>
 
@@ -164,7 +164,7 @@ function ConfigPage() {
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter cameras…"
+              placeholder="Filter Cameras…"
               className="input w-48 pl-8 text-xs"
             />
           </div>
@@ -195,12 +195,12 @@ function ConfigPage() {
             </div>
           ) : (
             <p className="py-3 text-center text-xs text-muted-foreground">
-              No cameras match “{filter}”.
+              No Cameras Match “{filter}”.
             </p>
           )
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-background p-3 text-center text-xs text-muted-foreground">
-            No cameras saved yet. Fill in the form below to add your first CCTV.
+            No Cameras Saved Yet. Fill in the Form below to Add Your First CCTV.
           </div>
         )}
 
@@ -663,7 +663,7 @@ function CameraEditor({
       </div>
 
       <div className="lg:col-span-2 lg:self-start space-y-5 rounded-2xl border border-border bg-card p-5">
-        <Field label="Location name">
+        <Field label="Location Name">
           <input
             value={draft.location}
             onChange={(e) => setDraft({ ...draft, location: e.target.value })}
@@ -697,7 +697,7 @@ function CameraEditor({
 
         <Section title="Camera Connection">
           <div className="space-y-3">
-            <Field label="IP address">
+            <Field label="IP Address">
               <input
                 value={draft.streamConfig?.ipAddress ?? ""}
                 onChange={(e) =>
@@ -731,7 +731,7 @@ function CameraEditor({
                   className="input"
                 />
               </Field>
-              <Field label="Snapshot path">
+              <Field label="Snapshot Path">
                 <input
                   value={
                     draft.streamConfig?.snapshotPath ?? "/cgi-bin/snapshot.cgi?channel=1&subtype=0"
@@ -750,7 +750,7 @@ function CameraEditor({
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Username (optional)">
+              <Field label="Username (Optional)">
                 <input
                   value={draft.streamConfig?.username ?? ""}
                   onChange={(e) =>
@@ -765,7 +765,7 @@ function CameraEditor({
                   className="input"
                 />
               </Field>
-              <Field label="Password (optional)">
+              <Field label="Password (Optional)">
                 <input
                   type="password"
                   value={draft.streamConfig?.password ?? ""}
@@ -789,7 +789,7 @@ function CameraEditor({
                 disabled={isFetchingSnapshot}
                 className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isFetchingSnapshot ? "Fetching snapshot…" : "Fetch snapshot"}
+                {isFetchingSnapshot ? "Fetching Snapshot…" : "Fetch Snapshot"}
               </button>
             </div>
           </div>
@@ -808,14 +808,14 @@ function CameraEditor({
               disabled={isEvaluating || camera.id === "draft-camera"}
               className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isEvaluating ? "Running evaluation…" : "Run evaluation"}
+              {isEvaluating ? "Running Evaluation…" : "Run Evaluation"}
             </button>
             <button
               onClick={save}
               className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
             >
               <Save className="h-4 w-4" />
-              Save configuration
+              Save Configuration
             </button>
           </div>
 
@@ -825,7 +825,7 @@ function CameraEditor({
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-card px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-accent"
           >
             <Plus className="h-4 w-4" />
-            Save as new camera
+            Save As New Camera
           </button>
         </div>
 
@@ -841,13 +841,13 @@ function CameraEditor({
             </div>
             <div className="grid grid-cols-2 gap-2 text-muted-foreground">
               <div>
-                <div className="text-[10px] uppercase">Water level</div>
+                <div className="text-[10px] uppercase">Water Level</div>
                 <div className="font-medium text-foreground">
                   {draft.last_evaluation.water_level ?? "-"}
                 </div>
               </div>
               <div>
-                <div className="text-[10px] uppercase">Water ratio</div>
+                <div className="text-[10px] uppercase">Water Ratio</div>
                 <div className="font-medium text-foreground">
                   {draft.last_evaluation.water_ratio ?? "-"}
                 </div>
@@ -924,7 +924,7 @@ function FeedCameraEditor({ camera }: { camera: Camera }) {
             by the OpenCV feed service. Readings are written to MongoDB every second.
           </span>
         </div>
-        <Field label="Location name">
+        <Field label="Location Name">
           <Input
             value={draft.location}
             onChange={(e) => setDraft({ ...draft, location: e.target.value })}

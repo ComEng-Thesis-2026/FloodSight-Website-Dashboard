@@ -83,6 +83,11 @@ Build a responsive, modern dashboard that allows users to:
   - dry reference capture
   - virtual marker lock, convert and unlock
   - save and restart video
+- Admins must be able to run **Save Screenshot With Matrices** for a live feed:
+  - save the clean and annotated JPEG screenshots locally under root `Snapshots/<feed id>/`
+  - store the water level, timestamp, flood status, flood ROI, marker ROI, virtual marker/reference level,
+    OpenCV metrics, accuracy values and latency in the MongoDB `camera_metrics` collection
+  - keep the image files out of MongoDB and record their local paths in the capture document
 
 ### 4.5 Camera Configuration Page
 
@@ -181,4 +186,3 @@ The current implementation uses a structured in-browser store with seeded camera
 - Full backend/database persistence beyond the existing prototype state
 - Payment, reporting, or public-facing citizen portal features
 - Multi-language support
-

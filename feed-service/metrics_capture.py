@@ -122,6 +122,7 @@ class CaptureJob:
     processed_jpeg: bytes | None
     latency: dict                     # stages measured on the worker thread (ms)
     t_frame_ready: float              # perf_counter() when the frame was decoded and resized
+    captures_dir: str | None = None   # manual captures can target the project root/Snapshots
     captured_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     t_queued: float = field(default_factory=time.perf_counter)
 
@@ -145,6 +146,8 @@ def build_metrics_doc(job: CaptureJob, snapshot: dict, reference_ratio: float | 
         "loop_index": p.get("loop_index"),
         "calibrated": bool((job.setup or {}).get("calibrated")),
         "marker_mode": p.get("marker_mode"),
+        "level_source": p.get("level_source"),
+        "road_condition": p.get("road_condition"),
         "water_level_m": p.get("water_level_m"),
         "raw_level_m": p.get("raw_level_m"),
         "status": map_status(p.get("status")) or p.get("status"),
@@ -252,7 +255,8 @@ class MetricsRecorder(threading.Thread):
         """Save one capture. Returns the local record (also written as <name>.json)."""
         tsync_ms = (time.perf_counter() - job.t_queued) * 1000.0
         name = capture_name(job.feed.id, job.captured_at)
-        out_dir = os.path.join(self.captures_dir, job.feed.id)
+        base_dir = job.captures_dir or self.captures_dir
+        out_dir = os.path.join(base_dir, job.feed.id)
         os.makedirs(out_dir, exist_ok=True)
 
         t0 = time.perf_counter()

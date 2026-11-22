@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from floodmon.bands import STATUS_ORDER
+import floodmon.ui as floodmon_ui
+import marker_memory
+from floodmon.bands import STATUS_ORDER, StatusTracker
 from floodmon.calibration import Calibration, SetupError, normalize_polygon
 from floodmon.config import parse_args
 from floodmon.modes import ReferenceGuard
@@ -30,10 +32,30 @@ from floodmon.pipeline import Monitor
 from floodmon.quality import SMALL, classify_lighting, enhance_for_display
 from floodmon.ui import MARKER_COLOR, draw_overlay
 from metrics_capture import CAPTURE_INTERVAL_S, CaptureJob, CaptureScheduler
+from virtual_flood_marker import VirtualFloodMarker
 
 LOG = logging.getLogger("feed-service")
 
-ACTIONS = ("capture_reference", "virtual_marker", "virtual_unlock", "save", "restart", "pause", "resume")
+ROAD_COLOR = {"DRY": (160, 200, 160), "WET": (235, 190, 60), "FLOODED": (0, 140, 255)}    # BGR
+
+ACTIONS = ("capture_reference", "virtual_marker", "virtual_unlock", "remember_marker", "save", "restart",
+           "pause", "resume", "save_screenshot")
+
+# draw_overlay (floodmon.ui) draws the virtual marker with floodmon's standard bands. A feed that
+# remembers its physical marker draws that one instead: the worker thread that is drawing names its
+# memory here, and floodmon.ui's draw_virtual_marker is routed through _draw_virtual_marker.
+_DRAWING = threading.local()
+_floodmon_draw_virtual_marker = floodmon_ui.draw_virtual_marker
+
+
+def _draw_virtual_marker(out, mg, level, raw, anomaly):
+    mem = getattr(_DRAWING, "memory", None)
+    if mem is None:
+        return _floodmon_draw_virtual_marker(out, mg, level, raw, anomaly)
+    return marker_memory.draw(out, mg, level, raw, anomaly, mem)
+
+
+floodmon_ui.draw_virtual_marker = _draw_virtual_marker
 COMMAND_TIMEOUT_S = 3.0
 MISSING_VIDEO_RETRY_S = 10.0
 
@@ -49,6 +71,7 @@ class FeedConfig:
     max_width: int = 960
     stream_fps: float = 12.0
     jpeg_quality: int = 75
+    flood_full_depth_m: float | None = None   # site value: depth (m) at which the flood ROI is all water
 
     @property
     def config_path(self) -> str:
@@ -420,6 +443,9 @@ class FeedWorker(threading.Thread):
                 cal.save(cfg.config_path)
 
             mon = Monitor(args, cal, frame.shape, source_kind="file", start_time=None, save_setup=save_setup)
+            # virtual marker measured from the flood ROI + road condition; installed before the
+            # stage timers so its work is part of the timed water detection
+            vfm = VirtualFloodMarker(mon, cal, full_depth_m=cfg.flood_full_depth_m)
             stage: dict = {}
             install_stage_timers(mon, stage)
             det = mon.det
@@ -449,10 +475,11 @@ class FeedWorker(threading.Thread):
                 LOG.info("[%s] saved %s dry reference: %s", cfg.id, light, name)
             det.on_reference_captured = reference_captured
 
-            ctx = dict(args=args, cal=cal, mon=mon, clip=clip, save_setup=save_setup, W=W, H=H,
+            ctx = dict(args=args, cal=cal, mon=mon, vfm=vfm, clip=clip, save_setup=save_setup, W=W, H=H,
                        guard=ReferenceGuard(wet_coverage=args.wet_coverage, wet_level=args.wet_level),
                        view_frame=frame, meas=None, q=det.quality, t=t, stage=stage,
-                       captures=CaptureScheduler(self.capture_interval_s))
+                       captures=CaptureScheduler(self.capture_interval_s), memory=None)
+            self._set_memory(ctx, self._load_memory(cal, W, H))
             self._ctx = ctx
             self._set_state("running", None)
             LOG.info("[%s] playing %s (%dx%d, %.1f fps, %s)", cfg.id, os.path.basename(cfg.video), W, H,
@@ -462,6 +489,53 @@ class FeedWorker(threading.Thread):
             self._ctx = None
             clip.release()
             self._fail_pending()
+
+    # ---- the remembered physical marker -----------------------------------
+    def _load_memory(self, cal, W, H):
+        """The saved memory of the physical marker; for a locked marker without one, it is read from
+        the dry reference taken while the physical marker was in view."""
+        cfg = self.cfg
+        mem = marker_memory.MarkerMemory.load(cfg.setup_dir)
+        if mem is not None and not mem.matches(cal):
+            LOG.warning("[%s] the remembered marker belongs to other marker ROI corners - ignored", cfg.id)
+            mem = None
+        if mem is not None or not (cal.marker_locked or cal.virtual_marker):
+            if mem is not None:
+                LOG.info("[%s] remembered marker: %s", cfg.id, " / ".join(
+                    f"{b['color']} {b['from_m']:.2f}-{b['to_m']:.2f} m" for b in mem.bands))
+            return mem
+        names = list((cal.physical_marker_references or {}).values()) + list((cal.reference_images or {}).values())
+        for name in dict.fromkeys(names):
+            img = cv2.imread(name if os.path.isabs(name) else os.path.join(cfg.setup_dir, name))
+            if img is None:
+                continue
+            if img.shape[:2] != (H, W):
+                img = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
+            mem, msg = marker_memory.learn(img, cal, source=f"dry reference {name}", reading_m=0.0)
+            LOG.info("[%s] %s (from %s)", cfg.id, msg, name)
+            if mem is not None:
+                mem.save(cfg.setup_dir)
+                return mem
+        return None
+
+    def _set_memory(self, ctx, mem):
+        ctx["memory"] = mem
+        status = ctx["mon"].tracker.status
+        ctx["mon"].tracker = (marker_memory.RememberedStatus(mem, ctx["args"].status_hysteresis) if mem is not None
+                              else StatusTracker(ctx["args"].status_hysteresis))
+        ctx["mon"].tracker.status = status
+
+    def _remember_marker(self, ctx) -> tuple[bool, str]:
+        """Read the physical marker in the current frame and keep it for the virtual marker."""
+        meas = ctx["meas"]
+        mem, msg = marker_memory.learn(ctx["view_frame"], ctx["cal"], source="lock",
+                                       reading_m=None if meas is None else meas.raw_level_m)
+        if mem is None:
+            return False, f"Physical marker NOT remembered: {msg}."
+        mem.save(self.cfg.setup_dir)
+        self._set_memory(ctx, mem)
+        LOG.info("[%s] %s", self.cfg.id, msg)
+        return True, msg + "."
 
     def _loop(self, ctx, frame, t):
         cfg, mon, cal, clip = self.cfg, ctx["mon"], ctx["cal"], ctx["clip"]
@@ -507,6 +581,12 @@ class FeedWorker(threading.Thread):
                 t_fps, n_fps = time.monotonic(), 0
             mon.fps = fps
             payload = r.payload
+            payload.update(ctx["vfm"].payload_fields())
+            if ctx["vfm"].active and "method" in payload:
+                payload["method"] = "flood_roi"
+            mem = ctx["memory"]
+            if mem is not None and payload.get("water_level_m") is not None:
+                payload["marker_color"] = mem.color_at(payload["water_level_m"])   # remembered band reached
             payload.update({
                 "fps": round(fps, 1),
                 "feed_id": cfg.id,
@@ -567,9 +647,17 @@ class FeedWorker(threading.Thread):
         base = enhance_for_display(r.frame, r.quality).copy()
         # hard failures (no signal, frozen video) give a measurement without masks: no water tint
         show_water = r.meas is None or getattr(r.meas, "water_mask", None) is not None
-        annotated = draw_overlay(base, mon.det, cal, r.res, r.meas, r.status, fps, hint, show_water,
-                                 show_handles=False,
-                                 extra_lines=[(f"MARKER: {cal.marker_mode.upper()}", MARKER_COLOR)])
+        vfm = ctx["vfm"]
+        lines = [(f"MARKER: {cal.marker_mode.upper()}"
+                  + ("  (level from flood ROI)" if vfm.active else ""), MARKER_COLOR)]
+        if vfm.condition:
+            lines.append((f"ROAD: {vfm.condition}", ROAD_COLOR[vfm.condition]))
+        _DRAWING.memory = ctx["memory"]
+        try:
+            annotated = draw_overlay(base, mon.det, cal, r.res, r.meas, r.status, fps, hint, show_water,
+                                     show_handles=False, extra_lines=lines)
+        finally:
+            _DRAWING.memory = None
         ok, buf = cv2.imencode(".jpg", annotated, params)
         out[True] = buf.tobytes() if ok else None
         return out
@@ -590,6 +678,7 @@ class FeedWorker(threading.Thread):
             "capturing": mon.det.capture is not None,
             "conversion_hint": mon.vmark.status_text(),
             "paused": ctx["clip"].paused,
+            "marker_memory": ctx["memory"].summary() if ctx["memory"] is not None else None,
         }
 
     def _new_loop(self, ctx):
@@ -597,6 +686,7 @@ class FeedWorker(threading.Thread):
         mon = ctx["mon"]
         mon.kalman.reset()
         mon.tracker.status = STATUS_ORDER[0]
+        ctx["vfm"].reset()
         with self._cond:
             self.loop_index += 1
         LOG.info("[%s] video loop %d", self.cfg.id, self.loop_index)
@@ -618,6 +708,39 @@ class FeedWorker(threading.Thread):
     def _apply(self, ctx, cmd: Command) -> dict:
         cal, mon, clip = ctx["cal"], ctx["mon"], ctx["clip"]
         kind, data = cmd.kind, cmd.data
+        if kind == "save_screenshot":
+            if self.recorder is None:
+                return {"ok": False, "message": "Measurement capture recording is disabled."}
+            with self._cond:
+                payload = dict(self._payload or {})
+                setup = dict(self._setup or {})
+                jpegs = dict(self._jpeg)
+            if not payload or not setup:
+                return {"ok": False, "message": "No live frame is available yet."}
+            stage = ctx.get("stage") or {}
+            snapshots_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "Snapshots")
+            )
+            queued = self.recorder.submit(CaptureJob(
+                feed=self.cfg,
+                payload=payload,
+                setup=setup,
+                trigger="manual",
+                event="admin_save",
+                clean_jpeg=jpegs.get(False),
+                processed_jpeg=jpegs.get(True),
+                latency={"tcapture_ms": 0.0,
+                         "tprocessing_ms": round(stage.get("tprocessing_ms", 0.0), 3),
+                         "thsv_classification_ms": round(stage.get("thsv_classification_ms", 0.0), 3),
+                         "tkalman_ms": round(stage.get("tkalman_ms", 0.0), 3),
+                         "tsnapshot_ms": 0.0},
+                t_frame_ready=time.perf_counter(),
+                captures_dir=snapshots_dir,
+            ))
+            if not queued:
+                return {"ok": False, "message": "The capture recorder queue is full. Try again shortly."}
+            return {"ok": True, "message": "Screenshot and matrices queued for local and MongoDB saving.",
+                    "snapshot_directory": "Snapshots"}
         if kind == "set_setup":
             if cal.marker_locked and ("marker_roi" in data or "ref_height_m" in data):
                 return {"ok": False, "message": "The marker is locked (virtual marker) - unlock it first."}
@@ -625,20 +748,34 @@ class FeedWorker(threading.Thread):
                 setattr(cal, key, value)
             cal.frame_size = [ctx["W"], ctx["H"]]
             mon.set_calibration(ctx["view_frame"].shape)
+            ctx["vfm"].reset()
             ctx["save_setup"]()
-            return {"ok": True, "message": "Setup applied and saved. Capture a dry reference if the view changed.",
-                    "setup": self._setup_snapshot(ctx)}
+            msg = "Setup applied and saved. Capture a dry reference if the view changed."
+            if ctx["memory"] is not None and not ctx["memory"].matches(cal):
+                marker_memory.delete(self.cfg.setup_dir)          # it was read through the old marker ROI
+                self._set_memory(ctx, None)
+                msg += " The remembered marker was cleared: lock the marker again while it is in view."
+            return {"ok": True, "message": msg, "setup": self._setup_snapshot(ctx)}
         if kind == "capture_reference":
             q = ctx["q"]
-            go, msg = ctx["guard"].press(time.monotonic(), ctx["t"], ctx["meas"], q, mon.last_motion_t)
+            # the guard judges "dry" on how much of the road changed from the reference, as before
+            go, msg = ctx["guard"].press(time.monotonic(), ctx["t"], ctx["vfm"].check_meas(ctx["meas"]), q,
+                                         mon.last_motion_t)
             if go:
                 mon.record_anchors(ctx["view_frame"])
                 mon.det.start_capture(q.lighting, reason="manual")
                 mon.kalman.reset()
             return {"ok": go, "message": msg, "needs_confirm": not go}
         if kind == "virtual_marker":
-            msg = mon.vmark.press(ctx["t"], ctx["meas"], ctx["q"])
+            locking = not cal.marker_locked                     # step 1: the physical marker is in view
+            msg = mon.vmark.press(ctx["t"], ctx["vfm"].check_meas(ctx["meas"]), ctx["q"])
             ok = not msg.startswith(("Cannot", "Fit the marker", "The virtual marker is already"))
+            if ok and locking:
+                _, remembered = self._remember_marker(ctx)
+                msg = f"{msg} {remembered}"
+            return {"ok": ok, "message": msg}
+        if kind == "remember_marker":
+            ok, msg = self._remember_marker(ctx)
             return {"ok": ok, "message": msg}
         if kind == "virtual_unlock":
             msg = mon.vmark.unlock()

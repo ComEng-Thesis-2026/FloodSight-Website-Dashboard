@@ -151,6 +151,72 @@ class TestMongoDocuments(unittest.TestCase):
         self.assertIsNone(tr.update({"status": "SAFE", "water_level_m": 0.0}))
         self.assertEqual(tr.update({"status": "ALERT", "water_level_m": 0.31}), "STATUS CHANGED")
 
+    def test_road_condition_events(self):
+        tr = EventTracker()
+        tr.update({"status": "SAFE", "water_level_m": 0.0, "road_condition": "DRY"})
+        self.assertEqual(tr.update({"status": "SAFE", "water_level_m": 0.0, "road_condition": "WET"}), "ROAD WET")
+        self.assertIsNone(tr.update({"status": "SAFE", "water_level_m": 0.0, "road_condition": "WET"}))
+        # a status change wins; the road change is not reported twice afterwards
+        self.assertEqual(tr.update({"status": "ALERT", "water_level_m": 0.4, "road_condition": "FLOODED"}),
+                         "STATUS CHANGED")
+        self.assertIsNone(tr.update({"status": "ALERT", "water_level_m": 0.4, "road_condition": "FLOODED"}))
+        doc = build_reading_doc(self.feed, {"status": "ALERT", "water_level_m": 0.4, "road_condition": "FLOODED",
+                                            "level_source": "flood_roi"}, {"calibrated": True}, None)
+        self.assertEqual((doc["road_condition"], doc["level_source"]), ("FLOODED", "flood_roi"))
+
+
+class TestMarkerMemory(unittest.TestCase):
+    def test_learns_the_synthetic_marker(self):
+        import cv2
+        from floodmon.calibration import Calibration
+        import marker_memory
+        cal = Calibration.load(os.path.join(scene_dir(), "flood_config.json"))
+        img = cv2.imread(os.path.join(scene_dir(), "reference_dry_day.png"))      # dry, marker in view
+        mem, msg = marker_memory.learn(img, cal, source="test", reading_m=0.0)
+        self.assertIsNotNone(mem, msg)
+        self.assertEqual([b["color"] for b in mem.bands], ["GREEN", "YELLOW", "RED"])
+        self.assertFalse(mem.upside_down)
+        # the synthetic marker is painted with floodmon's bands: 0.30 m and 0.50 m
+        self.assertAlmostEqual(mem.bands[0]["to_m"], 0.30, delta=0.03)
+        self.assertAlmostEqual(mem.bands[1]["to_m"], 0.50, delta=0.03)
+        self.assertEqual((mem.status_at(0.1), mem.status_at(0.4), mem.status_at(0.7), mem.status_at(1.5)),
+                         ("SAFE", "ALERT", "DANGER", "DANGER"))
+        tmp = tempfile.mkdtemp(prefix="feed-test-mem-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        mem.save(tmp)
+        back = marker_memory.MarkerMemory.load(tmp)
+        self.assertEqual(back.bands, mem.bands)
+        self.assertIsNotNone(back.photo)
+        self.assertTrue(back.matches(cal))
+
+    def test_upside_down_marker_is_measured_the_right_way_up(self):
+        import cv2
+        import numpy as np
+        from floodmon.calibration import Calibration
+        import marker_memory
+        img = np.full((200, 200, 3), 90, np.uint8)
+        # a 1.0 m marker 100 px tall, painted RED at the road (y 150), then YELLOW, GREEN on top
+        for (y0, y1), bgr in (((100, 150), (0, 0, 200)), ((80, 100), (0, 210, 240)), ((50, 80), (0, 170, 0))):
+            cv2.rectangle(img, (90, y0), (110, y1 - 1), bgr, -1)
+        cal = Calibration(flood_roi=[[0, 150], [199, 150], [199, 199]],
+                          marker_roi=[[90, 150], [110, 150], [110, 50], [90, 50]], ref_height_m=1.0)
+        mem, _ = marker_memory.learn(img, cal, source="test")
+        self.assertTrue(mem.upside_down)
+        self.assertEqual([b["color"] for b in mem.seen_bands], ["RED", "YELLOW", "GREEN"])
+        self.assertEqual([b["color"] for b in mem.bands], ["GREEN", "YELLOW", "RED"])
+        self.assertAlmostEqual(mem.bands[0]["to_m"], 0.30, delta=0.02)
+        self.assertAlmostEqual(mem.bands[1]["to_m"], 0.50, delta=0.02)
+
+    def test_nothing_learned_without_a_marker(self):
+        import numpy as np
+        from floodmon.calibration import Calibration
+        import marker_memory
+        cal = Calibration(flood_roi=[[0, 150], [199, 150], [199, 199]],
+                          marker_roi=[[90, 150], [110, 150], [110, 50], [90, 50]], ref_height_m=1.0)
+        mem, msg = marker_memory.learn(np.full((200, 200, 3), 90, np.uint8), cal, source="test")
+        self.assertIsNone(mem)
+        self.assertIn("no green / yellow / red", msg)
+
 
 class TestWorker(unittest.TestCase):
     def setUp(self):
@@ -222,6 +288,70 @@ class TestWorker(unittest.TestCase):
         self.assertTrue(worker.submit("save")["ok"])
         res = worker.submit("capture_reference")
         self.assertIn("message", res)
+
+    def test_lock_remembers_the_physical_marker(self):
+        worker, sink = self._start(make_feed(self.tmp))
+        self.assertTrue(wait_for(lambda: worker.setup() is not None))
+        self.assertIsNone(worker.setup()["marker_memory"])          # physical, nothing remembered yet
+        self.assertTrue(worker.submit("pause")["ok"])
+        self.assertTrue(worker.submit("restart")["ok"])               # the dry scene, marker in view
+        res = worker.submit("virtual_marker")                         # step 1: lock -> remember
+        self.assertTrue(res["ok"], res)
+        self.assertIn("Physical marker remembered", res["message"])
+        self.assertTrue(wait_for(lambda: worker.setup()["marker_memory"] is not None))
+        mem = worker.setup()["marker_memory"]
+        self.assertEqual([b["color"] for b in mem["bands"]], ["GREEN", "YELLOW", "RED"])
+        for name in ("marker_memory.json", "marker_memory.png"):
+            self.assertTrue(os.path.isfile(os.path.join(worker.cfg.setup_dir, name)), name)
+        self.assertTrue(wait_for(lambda: (worker.reading() or {}).get("marker_color") == "GREEN"))
+        # a moved marker ROI no longer matches what was remembered
+        self.assertTrue(worker.submit("virtual_unlock")["ok"])
+        roi = worker.setup()["marker_roi"]
+        res = worker.submit("set_setup", {"marker_roi": [[x + 3, y] for x, y in roi]})
+        self.assertTrue(res["ok"], res)
+        self.assertIn("remembered marker was cleared", res["message"])
+        self.assertIsNone(res["setup"]["marker_memory"])
+        self.assertTrue(wait_for(lambda: worker.setup()["marker_memory"] is None))
+        self.assertFalse(os.path.isfile(os.path.join(worker.cfg.setup_dir, "marker_memory.json")))
+
+    def test_locked_feed_remembers_from_its_dry_reference(self):
+        feed = make_feed(self.tmp)
+        with open(feed.config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg.update(marker_locked=True, virtual_marker=True)
+        with open(feed.config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        worker, _ = self._start(feed)
+        self.assertTrue(wait_for(lambda: worker.setup() is not None))
+        mem = worker.setup()["marker_memory"]
+        self.assertIsNotNone(mem)
+        self.assertTrue(mem["source"].startswith("dry reference"))
+        self.assertTrue(wait_for(lambda: (worker.reading() or {}).get("marker_color") is not None))
+
+    def test_virtual_marker_measures_from_flood_roi(self):
+        feed = make_feed(self.tmp)
+        with open(feed.config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg.update(marker_locked=True, virtual_marker=True)          # calibrated, then made virtual
+        with open(feed.config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        worker, sink = self._start(feed)
+        self.assertTrue(wait_for(lambda: worker.loop_index >= 1, 60.0), "the clip never looped")
+        first = [p for p, _ in sink.payloads if p.get("loop_index") == 0 and p.get("water_level_m") is not None]
+        self.assertTrue(all(p.get("level_source") == "flood_roi" for p in first))
+        self.assertTrue(all(p.get("method") == "flood_roi" for p in first))
+        dry = [p for p in first if p["video_t_s"] < 5.0]               # the scene is dry for 6 s
+        self.assertTrue(dry and all(p["road_condition"] == "DRY" and p["water_level_m"] == 0.0 for p in dry))
+        flooded = [p for p in first if p.get("road_condition") == "FLOODED"]
+        self.assertTrue(flooded, "the synthetic flood was never classified FLOODED")
+        # depth = water share of the flood ROI x the site's full-cover depth (default 0.20 m)
+        last = flooded[-1]
+        self.assertGreater(last["water_level_m"], 0.0)
+        self.assertEqual(last["full_cover_depth_m"], 0.20)
+        self.assertAlmostEqual(last["raw_level_m"], last["flood_coverage_pct"] / 100 * 0.20, delta=0.005)
+        self.assertLessEqual(max(p["raw_level_m"] for p in first), 0.20)
+        self.assertFalse(last["obstruction_at_marker"])          # the marker ROI is not looked at
+        self.assertTrue(all(p["road_condition"] in ("DRY", "WET", "FLOODED") for p in first))
 
     def test_pause_resume(self):
         worker, sink = self._start(make_feed(self.tmp))
@@ -344,6 +474,33 @@ class TestMetricsCapture(unittest.TestCase):
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], SUMMARY_HEADER)
         self.assertEqual(len(rows), 2)
+
+    def test_manual_recorder_writes_to_snapshots_override(self):
+        rec = MetricsRecorder(os.path.join(self.tmp, "automatic"), self.tmp)
+        snapshots_dir = os.path.join(self.tmp, "Snapshots")
+        job = CaptureJob(
+            feed=self.feed,
+            payload={"status": "ALERT", "water_level_m": 0.35, "flood_coverage_pct": 50.0,
+                     "marker_mode": "virtual"},
+            setup={"calibrated": True, "ref_height_m": 1.0,
+                   "marker_roi": [[100, 100], [200, 100], [200, 500], [100, 500]],
+                   "frame_size": [960, 540]},
+            trigger="manual",
+            event="admin_save",
+            clean_jpeg=b"\xff\xd8clean",
+            processed_jpeg=b"\xff\xd8overlay",
+            latency={"tcapture_ms": 0.0, "tprocessing_ms": 20.0,
+                     "thsv_classification_ms": 15.0, "tkalman_ms": 0.2, "tsnapshot_ms": 4.0},
+            t_frame_ready=time.perf_counter(),
+            captures_dir=snapshots_dir,
+        )
+        record = rec.record(job)
+        self.assertEqual(record["trigger"], "manual")
+        self.assertEqual(record["event"], "admin_save")
+        self.assertTrue(os.path.isfile(os.path.join(
+            snapshots_dir, "kauswagan", record["capture_id"] + ".jpg")))
+        self.assertTrue(os.path.isfile(os.path.join(
+            snapshots_dir, "kauswagan", record["capture_id"] + ".json")))
 
     def test_worker_captures_events_and_intervals(self):
         rec = MetricsRecorder(os.path.join(self.tmp, "captures"), self.tmp)     # no MongoDB: local only

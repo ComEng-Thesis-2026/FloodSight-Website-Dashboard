@@ -44,13 +44,15 @@ def _roi_config(flood_roi) -> dict | None:
 
 
 class EventTracker:
-    """Same events as floodmon's TerminalFeed: status changes, obstruction, held data, lighting."""
+    """Same events as floodmon's TerminalFeed: status changes, obstruction, held data, lighting;
+    plus road condition changes (DRY / WET / FLOODED) from the feed service."""
 
     def __init__(self):
         self.last_status = None
         self.last_anomaly = False
         self.last_held = False
         self.last_light = None
+        self.last_road = None
 
     def update(self, payload: dict) -> str | None:
         event = None
@@ -66,7 +68,11 @@ class EventTracker:
                 event = "MEASURING AGAIN" if self.last_held else "OBSTRUCTION CLEARED"
         if event is None and self.last_light is not None and light != self.last_light:
             event = f"LIGHTING {str(light).upper()}"
+        road = payload.get("road_condition")
+        if event is None and road and self.last_road is not None and road != self.last_road:
+            event = f"ROAD {road}"
         self.last_status, self.last_anomaly, self.last_held, self.last_light = st, an, held, light
+        self.last_road = road or self.last_road
         return event
 
 
@@ -82,6 +88,8 @@ def build_feed_info(feed, payload: dict | None, setup: dict | None, state: str, 
         "marker_mode": s.get("marker_mode"),
         "references": s.get("references") or [],
         "data_valid": p.get("data_valid"),
+        "road_condition": p.get("road_condition"),
+        "level_source": p.get("level_source"),
         "flood_detected": p.get("flood_detected"),
         "flood_coverage_pct": p.get("flood_coverage_pct"),
         "confidence": p.get("confidence"),
@@ -140,12 +148,14 @@ def build_reading_doc(feed, payload: dict, setup: dict | None, event: str | None
         "water_level_m": payload.get("water_level_m"),
         "raw_level_m": payload.get("raw_level_m"),
         "status": map_status(payload.get("status")) or payload.get("status"),
+        "road_condition": payload.get("road_condition"),
         "flood_detected": payload.get("flood_detected"),
         "flood_coverage_pct": payload.get("flood_coverage_pct"),
         "confidence": payload.get("confidence"),
         "data_valid": payload.get("data_valid"),
         "anomaly_reason": payload.get("anomaly_reason"),
         "marker_mode": payload.get("marker_mode"),
+        "level_source": payload.get("level_source"),
         "image_quality": {"score": iq.get("score"), "mode": iq.get("mode"), "lighting": iq.get("lighting")},
         "fps": payload.get("fps"),
         "event": event,
