@@ -39,6 +39,8 @@ feed-service/videos/*
 !feed-service/videos/README.md
 # measurement captures (snapshots + metrics) grow while the service runs
 feed-service/captures/
+Snapshots/
+!Snapshots/.gitkeep
 
 # Personal notes and paper drafts stay local
 PROMPTS/

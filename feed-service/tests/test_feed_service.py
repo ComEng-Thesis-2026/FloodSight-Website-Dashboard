@@ -475,6 +475,33 @@ class TestMetricsCapture(unittest.TestCase):
         self.assertEqual(rows[0], SUMMARY_HEADER)
         self.assertEqual(len(rows), 2)
 
+    def test_manual_recorder_writes_to_snapshots_override(self):
+        rec = MetricsRecorder(os.path.join(self.tmp, "automatic"), self.tmp)
+        snapshots_dir = os.path.join(self.tmp, "Snapshots")
+        job = CaptureJob(
+            feed=self.feed,
+            payload={"status": "ALERT", "water_level_m": 0.35, "flood_coverage_pct": 50.0,
+                     "marker_mode": "virtual"},
+            setup={"calibrated": True, "ref_height_m": 1.0,
+                   "marker_roi": [[100, 100], [200, 100], [200, 500], [100, 500]],
+                   "frame_size": [960, 540]},
+            trigger="manual",
+            event="admin_save",
+            clean_jpeg=b"\xff\xd8clean",
+            processed_jpeg=b"\xff\xd8overlay",
+            latency={"tcapture_ms": 0.0, "tprocessing_ms": 20.0,
+                     "thsv_classification_ms": 15.0, "tkalman_ms": 0.2, "tsnapshot_ms": 4.0},
+            t_frame_ready=time.perf_counter(),
+            captures_dir=snapshots_dir,
+        )
+        record = rec.record(job)
+        self.assertEqual(record["trigger"], "manual")
+        self.assertEqual(record["event"], "admin_save")
+        self.assertTrue(os.path.isfile(os.path.join(
+            snapshots_dir, "kauswagan", record["capture_id"] + ".jpg")))
+        self.assertTrue(os.path.isfile(os.path.join(
+            snapshots_dir, "kauswagan", record["capture_id"] + ".json")))
+
     def test_worker_captures_events_and_intervals(self):
         rec = MetricsRecorder(os.path.join(self.tmp, "captures"), self.tmp)     # no MongoDB: local only
         rec.start()

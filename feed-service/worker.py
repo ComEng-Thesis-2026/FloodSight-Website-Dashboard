@@ -39,7 +39,7 @@ LOG = logging.getLogger("feed-service")
 ROAD_COLOR = {"DRY": (160, 200, 160), "WET": (235, 190, 60), "FLOODED": (0, 140, 255)}    # BGR
 
 ACTIONS = ("capture_reference", "virtual_marker", "virtual_unlock", "remember_marker", "save", "restart",
-           "pause", "resume")
+           "pause", "resume", "save_screenshot")
 
 # draw_overlay (floodmon.ui) draws the virtual marker with floodmon's standard bands. A feed that
 # remembers its physical marker draws that one instead: the worker thread that is drawing names its
@@ -708,6 +708,39 @@ class FeedWorker(threading.Thread):
     def _apply(self, ctx, cmd: Command) -> dict:
         cal, mon, clip = ctx["cal"], ctx["mon"], ctx["clip"]
         kind, data = cmd.kind, cmd.data
+        if kind == "save_screenshot":
+            if self.recorder is None:
+                return {"ok": False, "message": "Measurement capture recording is disabled."}
+            with self._cond:
+                payload = dict(self._payload or {})
+                setup = dict(self._setup or {})
+                jpegs = dict(self._jpeg)
+            if not payload or not setup:
+                return {"ok": False, "message": "No live frame is available yet."}
+            stage = ctx.get("stage") or {}
+            snapshots_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "Snapshots")
+            )
+            queued = self.recorder.submit(CaptureJob(
+                feed=self.cfg,
+                payload=payload,
+                setup=setup,
+                trigger="manual",
+                event="admin_save",
+                clean_jpeg=jpegs.get(False),
+                processed_jpeg=jpegs.get(True),
+                latency={"tcapture_ms": 0.0,
+                         "tprocessing_ms": round(stage.get("tprocessing_ms", 0.0), 3),
+                         "thsv_classification_ms": round(stage.get("thsv_classification_ms", 0.0), 3),
+                         "tkalman_ms": round(stage.get("tkalman_ms", 0.0), 3),
+                         "tsnapshot_ms": 0.0},
+                t_frame_ready=time.perf_counter(),
+                captures_dir=snapshots_dir,
+            ))
+            if not queued:
+                return {"ok": False, "message": "The capture recorder queue is full. Try again shortly."}
+            return {"ok": True, "message": "Screenshot and matrices queued for local and MongoDB saving.",
+                    "snapshot_directory": "Snapshots"}
         if kind == "set_setup":
             if cal.marker_locked and ("marker_roi" in data or "ref_height_m" in data):
                 return {"ok": False, "message": "The marker is locked (virtual marker) - unlock it first."}
