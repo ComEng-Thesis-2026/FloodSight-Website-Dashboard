@@ -200,7 +200,7 @@ function ConfigPage() {
           )
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-background p-3 text-center text-xs text-muted-foreground">
-            No Cameras Saved Yet. Fill in the Form below to Add Your First CCTV.
+            No Cameras Saved Yet. Fill in the Form Below to Add Your First CCTV.
           </div>
         )}
 

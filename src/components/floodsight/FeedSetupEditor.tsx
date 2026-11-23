@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Camera as CameraIcon,
-  ImageDown,
   Lock,
   Minus,
   Palette,
@@ -444,17 +443,6 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
           </Button>
           <Button
             type="button"
-            variant="default"
-            className="sm:col-span-2"
-            onClick={() => runAction("save_screenshot", "Save screenshot with matrices")}
-            disabled={!running || busy !== null}
-            title="Save the clean and annotated screenshots in the project's Snapshots folder and store their matrices in MongoDB"
-          >
-            <ImageDown className="h-4 w-4" />
-            Save Screenshot With Matrices
-          </Button>
-          <Button
-            type="button"
             variant="secondary"
             onClick={() => runAction("virtual_marker", "Virtual marker")}
             disabled={!running || busy !== null || setup?.marker_mode === "virtual"}
@@ -485,13 +473,6 @@ export function FeedSetupEditor({ feedId }: { feedId: string }) {
             Remember Physical Marker
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">
-          The Screenshot Includes the Water Level, Timestamp, Flood ROI, Virtual Marker Level, Flood
-          Status, and OpenCV Measurement Matrices. The Clean and Annotated Images are Saved under{" "}
-          <span className="font-medium text-foreground">Snapshots/&lt;Feed Id&gt;/</span>, and Their
-          Matrix Data Is Stored in the MongoDB <span className="font-mono">camera_metrics</span>{" "}
-          collection.
-        </p>
         <Button
           type="button"
           className="w-full"

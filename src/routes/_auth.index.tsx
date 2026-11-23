@@ -41,7 +41,7 @@ export const Route = createFileRoute("/_auth/")({
 
 function Dashboard() {
   const navigate = useNavigate();
-  const { cameras, dbStatus, dbError, lastUpdate } = useLiveCameras();
+  const { cameras, dbStatus, dbError, feedError, lastUpdate } = useLiveCameras();
   const [activeId, setActiveId] = useState<string>("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   // OpenCV overlay on/off per feed (display only: the feed service keeps measuring either way)
@@ -53,21 +53,42 @@ function Dashboard() {
   const liveReading = feedLive.data?.reading ?? null;
 
   if (cameras.length === 0) {
+    const emptyStateTitle =
+      dbStatus === "connecting"
+        ? "Loading camera feeds..."
+        : dbStatus === "error"
+          ? "Unable to load camera feeds"
+          : feedError
+            ? "Live feeds are unavailable"
+            : "No cameras configured yet";
+
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <div className="w-full max-w-xl rounded-2xl border border-dashed border-border bg-card p-8 text-center">
           <CameraIcon className="mx-auto h-10 w-10 text-muted-foreground" />
-          <h2 className="mt-4 text-xl font-semibold">No cameras configured yet</h2>
+          <h2 className="mt-4 text-xl font-semibold">{emptyStateTitle}</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Add a CCTV source from the configuration page to begin live flood monitoring.
+            {dbStatus === "connecting"
+              ? "Connecting to the camera database and live feed service."
+              : dbStatus === "error"
+                ? "Camera data could not be loaded. Check the connection details below."
+                : feedError
+                  ? "No saved cameras were found, and the live feed service could not be reached."
+                  : "Add a CCTV source from the configuration page to begin live flood monitoring."}
           </p>
-          <button
-            type="button"
-            onClick={() => navigate({ to: "/config" })}
-            className="mt-5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-          >
-            Go to camera config
-          </button>
+          {dbError ? <p className="mt-3 text-sm text-red-700">MongoDB error: {dbError}</p> : null}
+          {feedError ? (
+            <p className="mt-1 text-sm text-red-700">Live feed service error: {feedError}</p>
+          ) : null}
+          {dbStatus === "connected" ? (
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/config" })}
+              className="mt-5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              Go to camera config
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -126,6 +147,11 @@ function Dashboard() {
         {dbError ? (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             MongoDB error: {dbError}
+          </div>
+        ) : null}
+        {feedError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            Live feed service error: {feedError}
           </div>
         ) : null}
 
